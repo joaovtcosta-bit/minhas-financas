@@ -3,6 +3,25 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+  // Celular: mostra o app 10% menor e impede o zoom automático do iPhone ao tocar em campos de texto
+  (function(){
+    var SCALE = 0.9, m = document.querySelector('meta[name="viewport"]');
+    function fit(){
+      var phone = Math.min(screen.width, screen.height) < 600 && matchMedia("(pointer: coarse)").matches;
+      var portrait = matchMedia("(orientation: portrait)").matches;
+      if (!m) return;
+      if (phone && portrait){
+        var w = Math.round(Math.min(screen.width, screen.height) / SCALE);
+        m.setAttribute("content", "width=" + w + ", initial-scale=" + SCALE + ", maximum-scale=" + SCALE);
+      } else {
+        m.setAttribute("content", "width=device-width, initial-scale=1, maximum-scale=1");
+      }
+    }
+    fit();
+    addEventListener("orientationchange", function(){ setTimeout(fit, 50); });
+  })();
+</script>
 <meta name="theme-color" content="#0a0b0b">
 <title>Minhas Finanças</title>
 <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
