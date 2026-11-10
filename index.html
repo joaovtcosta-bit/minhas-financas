@@ -862,6 +862,7 @@
   @media (min-width:960px){ .bottom-shade{display:none} }
   .pw-wrap{position:relative}
   .logout-row{margin-top:12px}
+  .login-keep{margin:12px 0 0}
   .logout-btn{width:100%;flex:none;background:transparent;border:1px solid color-mix(in srgb, var(--red) 45%, transparent);color:var(--red)}
   .logout-btn:active{background:color-mix(in srgb, var(--red) 12%, transparent)}
   .pw-wrap input{padding-right:52px}
@@ -1231,6 +1232,10 @@
       <div class="pw-wrap"><input id="loginPass2" type="password" autocomplete="new-password"><button type="button" class="pw-eye" data-for="loginPass2" aria-label="Mostrar senha" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="eye-open" d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle class="eye-open" cx="12" cy="12" r="3"/><path class="eye-shut" d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.4-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div>
     </div>
     <button type="button" class="login-forgot" id="loginForgot">Esqueci minha senha</button>
+    <label class="switch-row login-keep" id="loginKeepRow" for="loginKeep">
+      <span>Manter conectado</span>
+      <input type="checkbox" class="switch" id="loginKeep" checked>
+    </label>
     <button type="submit" class="btn primary" id="loginBtn">Entrar</button>
     <button type="button" class="login-switch" id="loginSwitch">Ainda não tenho conta</button>
     <div class="login-msg" id="loginMsg"></div>
@@ -1550,6 +1555,15 @@
   const SUPA_URL = "https://zqwtsjdsdavdwzxizcqa.supabase.co";
   const SUPA_KEY = "sb_publishable_TlMEi9PsPxZSaqVvuHyN4Q_TC9y9daj";
   let supa = null, me = null;
+  const KEEP_KEY = "mf-keep-signed-in";
+  const keepSignedIn = () => { try { return localStorage.getItem(KEEP_KEY) !== "0"; } catch { return true; } };
+  const setKeepSignedIn = on => { try { localStorage.setItem(KEEP_KEY, on ? "1" : "0"); } catch {} };
+  // a sessão vai para o localStorage (continua conectado) ou para o sessionStorage (sai ao fechar o app)
+  const authStorage = {
+    getItem(k){ try { return (keepSignedIn() ? localStorage : sessionStorage).getItem(k); } catch { return null; } },
+    setItem(k, v){ try { (keepSignedIn() ? localStorage : sessionStorage).setItem(k, v); } catch {} },
+    removeItem(k){ try { localStorage.removeItem(k); } catch {} try { sessionStorage.removeItem(k); } catch {} }
+  };
 
   // Lançamento dividido que veio da conta dela, visto do seu lado (só leitura).
   // Compra dividida dela  -> compra "paga por ela" (payer:"partner") com a SUA parte em pct.
@@ -1648,6 +1662,8 @@
         $("loginPassBox").hidden = mode === "forgot";
         $("loginPass2Box").hidden = mode !== "newpass";
         $("loginForgot").hidden = mode !== "login";
+        $("loginKeepRow").hidden = !(mode === "login" || mode === "signup");
+        $("loginKeep").checked = keepSignedIn();
         $("loginPassLbl").textContent = mode === "newpass" ? "Nova senha" : "Senha";
         $("loginPass").autocomplete = mode === "login" ? "current-password" : "new-password";
         $("loginPass").value = ""; $("loginPass2").value = "";
@@ -1682,6 +1698,7 @@
         if (mode !== "newpass" && !/^\S+@\S+\.\S+$/.test(email)) return say("Informe um e-mail válido.", true);
         if (mode !== "forgot" && password.length < 6) return say("A senha precisa ter pelo menos 6 caracteres.", true);
         if (mode === "newpass" && password !== $("loginPass2").value) return say("As duas senhas não são iguais.", true);
+        if (mode === "login" || mode === "signup") setKeepSignedIn($("loginKeep").checked);
         const b = $("loginBtn"); b.disabled = true;
         say({login:"Entrando…", signup:"Criando conta…", forgot:"Enviando…", newpass:"Salvando…"}[mode]);
         try {
@@ -1721,7 +1738,7 @@
         if (db && id) s = cloudStore(db, id);
       } else if (window.supabase && window.supabase.createClient){
         let recovering = /type=recovery/.test(location.hash);
-        supa = window.supabase.createClient(SUPA_URL, SUPA_KEY, {auth: {persistSession: true, autoRefreshToken: true}});
+        supa = window.supabase.createClient(SUPA_URL, SUPA_KEY, {auth: {persistSession: true, autoRefreshToken: true, storage: authStorage}});
         supa.auth.onAuthStateChange(ev => { if (ev === "PASSWORD_RECOVERY") recovering = true; });
         const {data} = await supa.auth.getSession();
         if (/type=recovery|access_token/.test(location.hash)) try { history.replaceState(null, "", location.pathname); } catch {}
