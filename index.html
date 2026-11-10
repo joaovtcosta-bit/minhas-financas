@@ -843,6 +843,16 @@
   .login-msg{font-size:14px;color:var(--muted);min-height:18px;margin-top:8px;text-align:center}
   .login-msg.bad{color:var(--red)}
   .login-field{display:grid}
+  .pw-wrap{position:relative}
+  .pw-wrap input{padding-right:52px}
+  .pw-eye{position:absolute;top:50%;right:6px;transform:translateY(-50%);width:40px;height:40px;border:0;border-radius:12px;
+    background:transparent;color:var(--muted);display:grid;place-items:center;cursor:pointer}
+  .pw-eye:hover,.pw-eye[aria-pressed="true"]{color:var(--text)}
+  .pw-eye:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+  .pw-eye svg{width:20px;height:20px}
+  .pw-eye .eye-shut{display:none}
+  .pw-eye[aria-pressed="true"] .eye-shut{display:inline}
+  .pw-eye[aria-pressed="true"] .eye-open{display:none}
   .login-forgot{justify-self:end;border:0;background:transparent;color:var(--muted);font-size:13.5px;cursor:pointer;padding:8px 2px 0}
   .login-forgot:hover{color:var(--text)}
   .code-big{font-size:30px;font-weight:700;letter-spacing:.18em;text-align:center;padding:16px;border-radius:18px;background:var(--raised);user-select:all}
@@ -1193,11 +1203,11 @@
     </div>
     <div class="login-field" id="loginPassBox">
       <label for="loginPass" id="loginPassLbl">Senha</label>
-      <input id="loginPass" type="password" autocomplete="current-password">
+      <div class="pw-wrap"><input id="loginPass" type="password" autocomplete="current-password"><button type="button" class="pw-eye" data-for="loginPass" aria-label="Mostrar senha" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="eye-open" d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle class="eye-open" cx="12" cy="12" r="3"/><path class="eye-shut" d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.4-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div>
     </div>
     <div class="login-field" id="loginPass2Box" hidden>
       <label for="loginPass2">Repita a nova senha</label>
-      <input id="loginPass2" type="password" autocomplete="new-password">
+      <div class="pw-wrap"><input id="loginPass2" type="password" autocomplete="new-password"><button type="button" class="pw-eye" data-for="loginPass2" aria-label="Mostrar senha" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="eye-open" d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle class="eye-open" cx="12" cy="12" r="3"/><path class="eye-shut" d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.4-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div>
     </div>
     <button type="button" class="login-forgot" id="loginForgot">Esqueci minha senha</button>
     <button type="submit" class="btn primary" id="loginBtn">Entrar</button>
@@ -1622,7 +1632,16 @@
         $("loginPass").value = ""; $("loginPass2").value = "";
         say("");
       };
-      const setMode = m => { mode = m; paint(); };
+      const showPw = (btn, on) => {
+        $(btn.dataset.for).type = on ? "text" : "password";
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+        btn.setAttribute("aria-label", on ? "Esconder senha" : "Mostrar senha");
+      };
+      L.querySelectorAll(".pw-eye").forEach(btn => btn.onclick = () => {
+        showPw(btn, btn.getAttribute("aria-pressed") !== "true");
+        $(btn.dataset.for).focus();
+      });
+      const setMode = m => { mode = m; L.querySelectorAll(".pw-eye").forEach(b => showPw(b, false)); paint(); };
       paint(); L.hidden = false;
       $("loginSwitch").onclick = () => setMode(mode === "login" ? "signup" : "login");
       $("loginForgot").onclick = () => setMode("forgot");
