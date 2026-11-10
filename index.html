@@ -550,6 +550,7 @@
     .side-safe[hidden]{display:none}
     .side-safe .safe-val{font-size:26px;margin:2px 0}
     .tabbar #cfgBtn{margin-top:0}
+    .tabbar .side-safe[hidden] + #cfgBtn{margin-top:auto}
     #tabResumo .grid-top{grid-template-columns:minmax(0,1fr) minmax(0,1.35fr)}
     #tabResumo .hero{display:flex;flex-direction:column;justify-content:space-between}
     .col-main>.io-card{margin-top:16px}
@@ -1589,7 +1590,7 @@
       const L = $("login"), msg = $("loginMsg");
       const paint = () => {
         $("loginTitle").textContent = signup ? "Criar conta" : "Entrar";
-        $("loginSub").textContent = signup ? "Cada pessoa tem a própria conta. Depois vocês ligam as duas pelo código do casal." : "Use seu e-mail e senha para ver suas finanças.";
+        $("loginSub").textContent = signup ? "Cada pessoa tem a própria conta. Depois você pode compartilhar a aba Divisão com outra pessoa usando um código." : "Use seu e-mail e senha para ver suas finanças.";
         $("loginBtn").textContent = signup ? "Criar conta" : "Entrar";
         $("loginSwitch").textContent = signup ? "Já tenho conta" : "Ainda não tenho conta";
         $("loginPass").autocomplete = signup ? "new-password" : "current-password";
@@ -2864,7 +2865,7 @@
         setRow("briefcase", "Salário e receitas fixas", recVal, () => go("rec")),
         setRow("palette", "Aparência", ({laranja:"Âmbar", menta:"Menta", azul:"Azul"})[profile.accent || "laranja"], () => go("look"))),
       h("div", {class:"set-group", style:"margin-top:12px"},
-        store && store.mode === "supabase" && setRow("users", "Conta e casal", me ? me.email : "", () => go("acct")),
+        store && store.mode === "supabase" && setRow("users", "Compartilhamento", me ? me.email : "", () => go("acct")),
         setRow("box", "Backup dos dados", store && store.mode === "supabase" ? "Importar" : "Copiar", () => go("backup"))),
       h("div", {class:"actions"}, h("button", {type:"button", class:"btn ghost", text:"Fechar", onclick: closeCfg}))
     ];
@@ -3019,20 +3020,20 @@
   }
   function pageAcct(){
     const err = errBox();
-    if (!hh){ loadHousehold().then(() => { if (cfgPage === "acct") renderCfg(); }).catch(() => { err.textContent = "Não foi possível carregar o casal."; }); }
+    if (!hh){ loadHousehold().then(() => { if (cfgPage === "acct") renderCfg(); }).catch(() => { err.textContent = "Não foi possível carregar o compartilhamento."; }); }
     const myName = profile.myName || null;
     let body;
     if (!hh) body = [h("div", {class:"hint", text:"Carregando…"})];
     else if (hh.none){
       const codeIn = h("input", {id:"joinCode", maxlength:8, placeholder:"Ex.: 4F9A2C1B", style:"text-transform:uppercase;letter-spacing:.12em"});
       body = [
-        h("div", {class:"hint", style:"margin:0 4px 10px", text:`Ligue sua conta à de ${name()} para a aba Divisão ficar igual para os dois. Cada um continua vendo só os próprios lançamentos; o que for dividido aparece para ambos.`}),
-        h("div", {class:"actions", style:"margin-top:4px"}, h("button", {type:"button", class:"btn primary", text:"Criar casal e gerar código", onclick: async () => {
+        h("div", {class:"hint", style:"margin:0 4px 10px", text:"Ligue sua conta à de outra pessoa para que a aba Divisão fique igual nas duas. Cada conta continua vendo só os próprios lançamentos; o que for dividido aparece para ambas."}),
+        h("div", {class:"actions", style:"margin-top:4px"}, h("button", {type:"button", class:"btn primary", text:"Gerar código", onclick: async () => {
           const r = await supa.rpc("create_household", {p_display_name: myName});
           if (r.error) return err.textContent = "Não foi possível criar agora.";
           hh = null; renderCfg();
         }})),
-        h("label", {for:"joinCode", text:`Ou entre com o código que ${name()} gerou`}),
+        h("label", {for:"joinCode", text:"Ou digite o código que você recebeu"}),
         codeIn,
         h("div", {class:"actions"}, h("button", {type:"button", class:"btn ghost", text:"Entrar com código", onclick: async () => {
           const code = codeIn.value.trim().toUpperCase();
@@ -3040,7 +3041,7 @@
           const r = await supa.rpc("join_household", {p_code: code, p_display_name: myName});
           if (r.error){
             const m = r.error.message || "";
-            return err.textContent = /inválido/i.test(m) ? "Código não encontrado. Confira as letras e números." : /completo/i.test(m) ? "Esse casal já tem duas pessoas." : "Não foi possível entrar agora.";
+            return err.textContent = /inválido/i.test(m) ? "Código não encontrado. Confira as letras e números." : /completo/i.test(m) ? "Esse código já está sendo usado por duas contas." : "Não foi possível entrar agora.";
           }
           toast("Contas ligadas"); setTimeout(() => location.reload(), 900);
         }}))
@@ -3049,15 +3050,15 @@
       const other = hh.members.find(x => x.user_id !== me.id);
       body = [
         h("div", {class:"hint", style:"margin:0 4px 10px", text: other
-          ? `Ligado com ${other.display_name || name()}. Os lançamentos divididos de cada um aparecem na aba Divisão dos dois.`
-          : `Mande este código para ${name()}. Ela cria a conta dela, vai em Configurações › Conta e casal e digita o código.`}),
+          ? `Conta ligada${other.display_name ? " com " + other.display_name : ""}. Os lançamentos divididos aparecem na aba Divisão das duas contas.`
+          : "Envie este código para a pessoa com quem você divide os gastos. Ela cria uma conta neste site, abre Configurações › Compartilhamento e digita o código."}),
         !other && h("div", {class:"code-big num", text: hh.code})
       ];
     }
     return [
-      pageHead("Conta e casal", "menu"),
+      pageHead("Compartilhamento", "menu"),
       h("div", {class:"set-group"}, setRow("user", "Conectado como", me ? me.email : "", () => {})),
-      h("h4", {text:"Casal"}),
+      h("h4", {text:"Compartilhar a Divisão"}),
       body, err,
       h("div", {class:"actions"}, confirmBtn("Sair da conta", "Toque de novo para sair", async () => { await supa.auth.signOut(); location.reload(); }, "btn ghost"))
     ];
