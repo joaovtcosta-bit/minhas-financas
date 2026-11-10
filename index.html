@@ -842,6 +842,9 @@
   .login-switch{border:0;background:transparent;color:var(--accent);font-weight:600;margin-top:12px;cursor:pointer;padding:8px}
   .login-msg{font-size:14px;color:var(--muted);min-height:18px;margin-top:8px;text-align:center}
   .login-msg.bad{color:var(--red)}
+  .login-field{display:grid}
+  .login-forgot{justify-self:end;border:0;background:transparent;color:var(--muted);font-size:13.5px;cursor:pointer;padding:8px 2px 0}
+  .login-forgot:hover{color:var(--text)}
   .code-big{font-size:30px;font-weight:700;letter-spacing:.18em;text-align:center;padding:16px;border-radius:18px;background:var(--raised);user-select:all}
   .backup-area{width:100%;min-height:140px;padding:12px 14px;border-radius:16px;background:var(--raised);border:1px solid transparent;color:var(--text);
     font:12px/1.4 ui-monospace,Menlo,monospace;resize:vertical}
@@ -1184,10 +1187,19 @@
   <form class="login-box" id="loginForm">
     <h2 id="loginTitle">Entrar</h2>
     <p id="loginSub">Use seu e-mail e senha para ver suas finanças.</p>
-    <label for="loginEmail">E-mail</label>
-    <input id="loginEmail" type="email" autocomplete="email" required>
-    <label for="loginPass">Senha</label>
-    <input id="loginPass" type="password" autocomplete="current-password" minlength="6" required>
+    <div class="login-field" id="loginEmailBox">
+      <label for="loginEmail">E-mail</label>
+      <input id="loginEmail" type="email" autocomplete="email">
+    </div>
+    <div class="login-field" id="loginPassBox">
+      <label for="loginPass" id="loginPassLbl">Senha</label>
+      <input id="loginPass" type="password" autocomplete="current-password">
+    </div>
+    <div class="login-field" id="loginPass2Box" hidden>
+      <label for="loginPass2">Repita a nova senha</label>
+      <input id="loginPass2" type="password" autocomplete="new-password">
+    </div>
+    <button type="button" class="login-forgot" id="loginForgot">Esqueci minha senha</button>
     <button type="submit" class="btn primary" id="loginBtn">Entrar</button>
     <button type="button" class="login-switch" id="loginSwitch">Ainda não tenho conta</button>
     <div class="login-msg" id="loginMsg"></div>
@@ -1583,45 +1595,78 @@
     };
   }
 
-  // Tela de login: devolve o usuário quando entra
-  function askLogin(){
+  // Tela de login. Modos: entrar, criar conta, esqueci a senha e nova senha (depois do link do e-mail).
+  // Devolve o usuário quando a pessoa entra.
+  function askLogin(startMode = "login"){
     return new Promise(resolve => {
-      let signup = false;
+      let mode = startMode;
       const L = $("login"), msg = $("loginMsg");
-      const paint = () => {
-        $("loginTitle").textContent = signup ? "Criar conta" : "Entrar";
-        $("loginSub").textContent = signup ? "Cada pessoa tem a própria conta. Depois você pode compartilhar a aba Divisão com outra pessoa usando um código." : "Use seu e-mail e senha para ver suas finanças.";
-        $("loginBtn").textContent = signup ? "Criar conta" : "Entrar";
-        $("loginSwitch").textContent = signup ? "Já tenho conta" : "Ainda não tenho conta";
-        $("loginPass").autocomplete = signup ? "new-password" : "current-password";
-        msg.textContent = ""; msg.className = "login-msg";
+      const TXT = {
+        login:   ["Entrar", "Use seu e-mail e senha para ver suas finanças.", "Entrar", "Ainda não tenho conta"],
+        signup:  ["Criar conta", "Cada pessoa tem a própria conta. Depois você pode compartilhar a aba Divisão com outra pessoa usando um código.", "Criar conta", "Já tenho conta"],
+        forgot:  ["Esqueci minha senha", "Informe o e-mail da sua conta. Vamos enviar um link para você criar uma senha nova.", "Enviar link", "Voltar para entrar"],
+        newpass: ["Nova senha", "Escolha uma senha nova para a sua conta.", "Salvar nova senha", ""]
       };
+      const say = (t, bad) => { msg.textContent = t; msg.className = "login-msg" + (bad ? " bad" : ""); };
+      const paint = () => {
+        const [title, sub, btn, sw] = TXT[mode];
+        $("loginTitle").textContent = title; $("loginSub").textContent = sub;
+        $("loginBtn").textContent = btn;
+        $("loginSwitch").textContent = sw; $("loginSwitch").hidden = !sw;
+        $("loginEmailBox").hidden = mode === "newpass";
+        $("loginPassBox").hidden = mode === "forgot";
+        $("loginPass2Box").hidden = mode !== "newpass";
+        $("loginForgot").hidden = mode !== "login";
+        $("loginPassLbl").textContent = mode === "newpass" ? "Nova senha" : "Senha";
+        $("loginPass").autocomplete = mode === "login" ? "current-password" : "new-password";
+        $("loginPass").value = ""; $("loginPass2").value = "";
+        say("");
+      };
+      const setMode = m => { mode = m; paint(); };
       paint(); L.hidden = false;
-      $("loginSwitch").onclick = () => { signup = !signup; paint(); };
+      $("loginSwitch").onclick = () => setMode(mode === "login" ? "signup" : "login");
+      $("loginForgot").onclick = () => setMode("forgot");
+      const done = user => { L.hidden = true; resolve(user); };
+      const friendly = m =>
+          /invalid login/i.test(m) ? "E-mail ou senha incorretos."
+        : /not confirmed/i.test(m) ? "Confirme seu e-mail antes de entrar (veja a caixa de entrada)."
+        : /already registered/i.test(m) ? "Esse e-mail já tem conta. Toque em “Já tenho conta”."
+        : /rate limit|security purposes|too many/i.test(m) ? "Muitas tentativas seguidas. Espere alguns minutos e tente de novo."
+        : /different from the old|same password/i.test(m) ? "A nova senha precisa ser diferente da anterior."
+        : /password/i.test(m) ? "A senha precisa ter pelo menos 6 caracteres."
+        : /expired|invalid.*(token|link)|otp/i.test(m) ? "O link expirou. Peça um novo em “Esqueci minha senha”."
+        : "Não foi possível agora. Confira a internet e tente de novo.";
       $("loginForm").onsubmit = async e => {
         e.preventDefault();
         const email = $("loginEmail").value.trim(), password = $("loginPass").value;
-        const b = $("loginBtn"); b.disabled = true; msg.className = "login-msg"; msg.textContent = signup ? "Criando conta…" : "Entrando…";
+        if (mode !== "newpass" && !/^\S+@\S+\.\S+$/.test(email)) return say("Informe um e-mail válido.", true);
+        if (mode !== "forgot" && password.length < 6) return say("A senha precisa ter pelo menos 6 caracteres.", true);
+        if (mode === "newpass" && password !== $("loginPass2").value) return say("As duas senhas não são iguais.", true);
+        const b = $("loginBtn"); b.disabled = true;
+        say({login:"Entrando…", signup:"Criando conta…", forgot:"Enviando…", newpass:"Salvando…"}[mode]);
         try {
-          if (signup){
+          if (mode === "signup"){
             const {data, error} = await supa.auth.signUp({email, password, options: {emailRedirectTo: location.origin}});
             if (error) throw error;
-            if (!data.session){ msg.textContent = "Conta criada. Abra o e-mail de confirmação que enviamos e depois volte aqui para entrar."; signup = false; $("loginBtn").textContent = "Entrar"; $("loginTitle").textContent = "Entrar"; $("loginSwitch").textContent = "Ainda não tenho conta"; return; }
-            L.hidden = true; resolve(data.session.user);
-          } else {
+            if (!data.session){ setMode("login"); $("loginEmail").value = email; return say("Conta criada. Abra o e-mail de confirmação que enviamos e depois volte aqui para entrar."); }
+            done(data.session.user);
+          } else if (mode === "login"){
             const {data, error} = await supa.auth.signInWithPassword({email, password});
             if (error) throw error;
-            L.hidden = true; resolve(data.session.user);
+            done(data.session.user);
+          } else if (mode === "forgot"){
+            const {error} = await supa.auth.resetPasswordForEmail(email, {redirectTo: location.origin});
+            if (error) throw error;
+            setMode("login"); $("loginEmail").value = email;
+            say("Se esse e-mail tiver conta, você vai receber um link para criar uma senha nova. Confira também o spam.");
+          } else {
+            const {data, error} = await supa.auth.updateUser({password});
+            if (error) throw error;
+            toast("Senha alterada");
+            done(data.user);
           }
-        } catch (err){
-          const m = String(err.message || err);
-          msg.className = "login-msg bad";
-          msg.textContent = /invalid login/i.test(m) ? "E-mail ou senha incorretos."
-            : /not confirmed/i.test(m) ? "Confirme seu e-mail antes de entrar (veja a caixa de entrada)."
-            : /already registered/i.test(m) ? "Esse e-mail já tem conta. Toque em “Já tenho conta”."
-            : /password/i.test(m) ? "A senha precisa ter pelo menos 6 caracteres."
-            : "Não foi possível agora. Confira a internet e tente de novo.";
-        } finally { b.disabled = false; }
+        } catch (err){ say(friendly(String(err.message || err)), true); }
+        finally { b.disabled = false; }
       };
     });
   }
@@ -1635,10 +1680,18 @@
         const id = user ? await user.id() : null;
         if (db && id) s = cloudStore(db, id);
       } else if (window.supabase && window.supabase.createClient){
+        let recovering = /type=recovery/.test(location.hash);
         supa = window.supabase.createClient(SUPA_URL, SUPA_KEY, {auth: {persistSession: true, autoRefreshToken: true}});
+        supa.auth.onAuthStateChange(ev => { if (ev === "PASSWORD_RECOVERY") recovering = true; });
         const {data} = await supa.auth.getSession();
-        me = data.session ? data.session.user : await askLogin();
-        supa.auth.onAuthStateChange((ev) => { if (ev === "SIGNED_OUT") location.reload(); });
+        if (/type=recovery|access_token/.test(location.hash)) try { history.replaceState(null, "", location.pathname); } catch {}
+        if (data.session && recovering) me = await askLogin("newpass");
+        else if (/error_code=otp_expired|error=access_denied/.test(location.hash)){
+          try { history.replaceState(null, "", location.pathname); } catch {}
+          me = data.session ? data.session.user : await (async () => { setTimeout(() => { $("loginMsg").className = "login-msg bad"; $("loginMsg").textContent = "O link expirou. Peça um novo em “Esqueci minha senha”."; }, 0); return askLogin(); })();
+        }
+        else me = data.session ? data.session.user : await askLogin();
+        supa.auth.onAuthStateChange(ev => { if (ev === "SIGNED_OUT") location.reload(); });
         s = supabaseStore();
       }
     } catch (e) { console.warn(e); }
