@@ -1216,9 +1216,11 @@
           <button type="button" data-rep="open" class="on">Sem prazo</button>
           <button type="button" data-rep="term">Por meses</button>
         </div>
-        <div id="repNWrap" hidden>
-          <label for="fRepN">Quantos meses</label>
-          <input id="fRepN" type="number" min="2" max="360" step="1" inputmode="numeric" placeholder="Ex.: 36">
+        <div id="repNWrap" class="row2" hidden>
+          <div><label for="fRepCur">Parcela atual</label>
+            <input id="fRepCur" type="number" min="1" max="360" step="1" inputmode="numeric" placeholder="1"></div>
+          <div><label for="fRepN">Total de parcelas</label>
+            <input id="fRepN" type="number" min="2" max="360" step="1" inputmode="numeric" placeholder="Ex.: 36"></div>
         </div>
         <div class="hint" id="repHint"></div>
       </div>
@@ -1545,9 +1547,12 @@
   // ---------- Despesas fixas (saem sozinhas todo mês; com prazo em meses ou sem prazo) ----------
   // fixed: [{id, desc, cat, day, account, cardId?, split?, pct?, start:'YYYY-MM', months?, end?, amounts:[{from,cents}]}]
   //   months = prazo (ex.: 36 parcelas do financiamento); end = encerrada manualmente após esse mês.
+  //   start = mês da parcela 1; since = mês a partir do qual o app lança (cadastro no meio: parcela 28 de 36).
   const isFix = t => !!t.fixed;
   const monthsBetween = (a, b) => { const [ay,am] = a.split("-").map(Number), [by,bm] = b.split("-").map(Number); return (by-ay)*12 + (bm-am); };
   const fixTermEnd = f => f.months ? shiftKey(f.start, f.months - 1) : null;
+  const fixFrom = f => f.since && f.since > f.start ? f.since : f.start;            // primeiro mês lançado
+  const fixNumAt = (f, k) => monthsBetween(f.start, k) + 1;                        // nº da parcela no mês k
   const fixLast = f => [f.end, fixTermEnd(f)].filter(Boolean).sort()[0] || null;     // último mês em que ela entra
   function fixedTxs(untilK){
     const out = [];
@@ -1555,7 +1560,8 @@
       if (!f.start) continue;
       const last = fixLast(f), stop = last && last < untilK ? last : untilK;
       const card = f.cardId ? profile.cards.find(c => c.id === f.cardId) : null;
-      for (let k = f.start, i = 0; k <= stop && i < 600; k = shiftKey(k, 1), i++){
+      const from = fixFrom(f);
+      for (let k = from, i = monthsBetween(f.start, from); k <= stop && i < 600; k = shiftKey(k, 1), i++){
         const cents = recAmount(f, k);
         if (!cents) continue;
         const [y,m] = k.split("-").map(Number);
@@ -2015,12 +2021,14 @@
     if (mk === nowK){
       const [y,m] = mk.split("-").map(Number), dim = daysIn(y,m), today = new Date().getDate();
       const cur = spendItems(mk), prev = spendItems(shiftKey(mk, -1));
-      const upto = cur.filter(i => i.day <= today).reduce((s,i) => s + i.cents, 0);
+      // gastos do dia a dia seguem o ritmo; despesas fixas entram uma vez, pelo valor do mês
+      const fixTot = cur.filter(i => isFix(i.tx)).reduce((s,i) => s + i.cents, 0);
+      const upto = cur.filter(i => !isFix(i.tx) && i.day <= today).reduce((s,i) => s + i.cents, 0);
       const prevTot = prev.reduce((s,i) => s + i.cents, 0);
       if (upto > 0){
         pace.hidden = false;
         pace.replaceChildren(h("span", {class:"ic"}, icon("info")), `No ritmo atual, ${keyLabel(mk, {month:"long"})} deve fechar perto de `,
-          h("b", {text: brl(Math.round(upto / today * dim))}), prevTot ? ` — ${keyLabel(shiftKey(mk,-1), {month:"long"})} foi ${brl(prevTot)}.` : ".");
+          h("b", {text: brl(Math.round(upto / today * dim) + fixTot)}), prevTot ? ` — ${keyLabel(shiftKey(mk,-1), {month:"long"})} foi ${brl(prevTot)}.` : ".");
       } else pace.hidden = true;
     } else pace.hidden = true;
 
@@ -2408,10 +2416,15 @@
     const rh = $("repHint"); rh.replaceChildren();
     if (rep && date){
       const start = date.slice(0,7), day = Number(date.slice(8,10)), n = Number($("fRepN").value);
+      const curN = Number($("fRepCur").value || 1);
       const amt = cents > 0 ? `${brl(cents)} ` : "";
-      if (repMode === "term" && Number.isInteger(n) && n >= 2)
-        rh.append(h("b", {text:`${amt}todo dia ${day}`}), ` · ${n} meses, de ${keyLabel(start)} a ${keyLabel(shiftKey(start, n-1))}`);
-      else if (repMode === "term") rh.append("Informe em quantos meses ela termina.");
+      if (repMode === "term" && Number.isInteger(n) && n >= 2 && Number.isInteger(curN) && curN >= 1 && curN <= n){
+        const left = n - curN + 1;
+        rh.append(h("b", {text:`${amt}todo dia ${day}`}), ` · parcela ${curN} de ${n} em ${keyLabel(start)}; ` +
+          (left === 1 ? "é a última." : `${left === n ? "" : "faltam "}${left} meses, até ${keyLabel(shiftKey(start, left-1))}`));
+      }
+      else if (repMode === "term" && curN > n) rh.append("A parcela atual não pode ser maior que o total.");
+      else if (repMode === "term") rh.append("Informe o total de parcelas.");
       else rh.append(h("b", {text:`${amt}todo dia ${day}`}), ` a partir de ${keyLabel(start)}, até você encerrar`);
       if (card) rh.append(" · entra na fatura do cartão");
     }
@@ -2478,7 +2491,7 @@
     $("fAcc").value = acc;
     fInst.value = String(tx ? (tx.installments||1) : 1);
     $("fSplit").checked = !!(tx && tx.split);
-    $("fRep").checked = false; repMode = "open"; $("fRepN").value = "";
+    $("fRep").checked = false; repMode = "open"; $("fRepN").value = ""; $("fRepCur").value = "";
     $("fPct").value = tx && Number.isFinite(tx.pct) ? tx.pct : 50;
     fCat = tx ? tx.cat : null;
     $("fErr").textContent = ""; $("newCat").classList.remove("open"); $("newCatName").value="";
@@ -2491,8 +2504,8 @@
 
   document.querySelectorAll("#fSeg button").forEach(b => b.addEventListener("click", () => setType(b.dataset.type)));
   ["fAcc","fInst","fDate","fSplit","fRep"].forEach(id => $(id).addEventListener("change", updateHints));
-  ["fAmount","fPct","fRepN"].forEach(id => $(id).addEventListener("input", updateHints));
-  document.querySelectorAll("#repSeg button").forEach(b => b.addEventListener("click", () => { repMode = b.dataset.rep; updateHints(); if (repMode === "term") $("fRepN").focus(); }));
+  ["fAmount","fPct","fRepN","fRepCur"].forEach(id => $(id).addEventListener("input", updateHints));
+  document.querySelectorAll("#repSeg button").forEach(b => b.addEventListener("click", () => { repMode = b.dataset.rep; updateHints(); if (repMode === "term") $("fRepCur").focus(); }));
   document.querySelectorAll("#pctQuick .chip").forEach(c => c.addEventListener("click", () => { $("fPct").value = c.dataset.p; updateHints(); }));
   $("addBtn").addEventListener("click", () => openForm(null, tab === "divisao" ? "partner" : "me"));
   $("fCancel").addEventListener("click", closeForm);
@@ -2536,12 +2549,13 @@
 
     if (!partner && !editing && fType === "out" && repeating()){
       const date = $("fDate").value, start = date.slice(0,7);
-      const n = Number($("fRepN").value);
-      if (repMode === "term" && !(Number.isInteger(n) && n >= 2 && n <= 360)) return $("fErr").textContent = "Informe o número de meses (de 2 a 360).";
+      const n = Number($("fRepN").value), curN = Number($("fRepCur").value || 1);
+      if (repMode === "term" && !(Number.isInteger(n) && n >= 2 && n <= 360)) return $("fErr").textContent = "Informe o total de parcelas (de 2 a 360).";
+      if (repMode === "term" && !(Number.isInteger(curN) && curN >= 1 && curN <= n)) return $("fErr").textContent = "A parcela atual deve ser entre 1 e o total.";
       const f = {id: uid(), desc: $("fDesc").value.trim() || fCat, cat: fCat, day: Number(date.slice(8,10)),
                  account: card ? card.name : $("fAcc").value, start, amounts:[{from:start, cents}], createdAt: Date.now()};
       if (card) f.cardId = card.id;
-      if (repMode === "term") f.months = n;
+      if (repMode === "term"){ f.months = n; if (curN > 1){ f.start = shiftKey(start, -(curN - 1)); f.since = start; } }
       if (split){ f.split = true; f.pct = pct; }
       $("fSave").disabled = true;
       try {
@@ -2549,7 +2563,7 @@
         const key = card ? invoiceKeyFor(date, card) : start;
         const [y,m] = key.split("-").map(Number); view = new Date(y, m-1, 1);
         closeForm(); render();
-        toast(f.months ? `Despesa fixa criada por ${f.months} meses` : "Despesa fixa criada");
+        toast(f.months ? `Despesa fixa criada: ${f.months - fixNumAt(f, start) + 1} de ${f.months} parcelas` : "Despesa fixa criada");
       } finally { $("fSave").disabled = false; }
       return;
     }
@@ -3380,7 +3394,7 @@
 
   // ----- Salário e receitas fixas -----
   // ----- Despesas fixas -----
-  const fixActive = (f, k) => k >= f.start && (!fixLast(f) || k <= fixLast(f));
+  const fixActive = (f, k) => k >= fixFrom(f) && (!fixLast(f) || k <= fixLast(f));
   function fixMenuVal(){
     const cur = monthKey(new Date());
     const act = profile.fixed.filter(f => fixActive(f, cur));
@@ -3389,10 +3403,10 @@
   }
   function fixStatus(f){
     const cur = monthKey(new Date()), last = fixLast(f);
-    if (cur < f.start) return `começa em ${keyLabel(f.start)} · ${brl(recAmount(f, f.start) || 0)}`;
+    if (cur < fixFrom(f)) return `começa em ${keyLabel(fixFrom(f))} · ${brl(recAmount(f, fixFrom(f)) || 0)}`;
     if (last && cur > last) return f.months && !f.end ? `concluída em ${keyLabel(last)}` : `encerrada em ${keyLabel(last)}`;
     const parts = [brl(recAmount(f, cur) || 0), `dia ${f.day}`];
-    if (f.months) parts.push(`${monthsBetween(f.start, cur) + 1}/${f.months}`);
+    if (f.months) parts.push(`${fixNumAt(f, cur)}/${f.months}`);
     return parts.join(" · ");
   }
   function pageFix(){
@@ -3414,7 +3428,7 @@
     const cur = monthKey(new Date());
     const f = isNew ? {desc:"", cat:"Contas", day:10, account:ACCOUNTS[0], start:cur, amounts:[]} : profile.fixed.find(x => x.id === id);
     if (!f) return pageFix();
-    const refK = cur < f.start ? f.start : cur;
+    const refK = isNew ? cur : (cur < fixFrom(f) ? fixFrom(f) : cur);
     const descIn = h("input", {maxlength:40, placeholder:"Ex.: Financiamento do carro, Netflix", value:f.desc});
     const amtIn = h("input", {class:"num", inputmode:"decimal", placeholder:"R$ 0,00", value: isNew ? "" : centsInput(recAmount(f, refK) || 0)});
     const dayIn = h("input", {type:"number", min:1, max:31, inputmode:"numeric", value:f.day});
@@ -3425,7 +3439,14 @@
     let term = !!f.months;
     const termSeg = h("div", {class:"seg rep-seg"});
     const monthsIn = h("input", {type:"number", min:2, max:360, inputmode:"numeric", placeholder:"Ex.: 36", value: f.months || ""});
-    const monthsBox = h("div", {}, field("Quantos meses no total", monthsIn));
+    // parcela no mês de referência (este mês, ou o 1º mês lançado se ainda não começou)
+    const curNum = !isNew && f.months ? Math.min(Math.max(fixNumAt(f, refK), 1), f.months) : "";
+    const curIn = h("input", {type:"number", min:1, max:360, inputmode:"numeric", placeholder:"1", value: curNum});
+    const curLbl = h("label", {});
+    const termHint = h("div", {class:"hint", text: isNew
+      ? "Já está pagando? Informe a parcela do mês em que começa a registrar. O app lança só dela em diante, até a última."
+      : (f.months ? `Parcela 1 em ${keyLabel(f.start)}, última em ${keyLabel(fixTermEnd(f))}.` + (fixFrom(f) > f.start ? ` O app registra a partir de ${keyLabel(fixFrom(f))}.` : "") : "Informe a parcela deste mês e o total.")});
+    const monthsBox = h("div", {}, h("div", {class:"row2"}, h("div", {}, curLbl, curIn), h("div", {}, field("Total de parcelas", monthsIn))), termHint);
     const paintTerm = () => {
       termSeg.replaceChildren(
         h("button", {type:"button", class: term ? "" : "on", text:"Sem prazo", onclick: () => { term = false; paintTerm(); }}),
@@ -3439,17 +3460,21 @@
     const paintSplit = () => { pctBox.hidden = !splitIn.checked; };
     splitIn.addEventListener("change", paintSplit); paintSplit();
     const fromIn = h("input", {type:"month", value: refK});
+    // a "parcela atual" se refere ao mês escolhido em "Começa em" (nova) ou a este mês (edição)
+    const paintCurLbl = () => { const k = isNew ? (/^\d{4}-\d{2}$/.test(fromIn.value) ? fromIn.value : cur) : refK; curLbl.textContent = `Parcela de ${keyLabel(k)}`; };
+    fromIn.addEventListener("input", paintCurLbl); paintCurLbl();
     const err = errBox();
     const readFrom = () => /^\d{4}-\d{2}$/.test(fromIn.value) ? fromIn.value : null;
 
     const save = async () => {
       const desc = descIn.value.trim(), cents = parseCents(amtIn.value), day = Number(dayIn.value), from = readFrom();
-      const months = Number(monthsIn.value), pct = Number(pctIn.value);
+      const months = Number(monthsIn.value), pct = Number(pctIn.value), curN = Number(curIn.value || 1);
       if (!desc) return err.textContent = "Dê um nome, como “Financiamento do carro”.";
       if (!(cents > 0)) return err.textContent = "Informe um valor maior que zero.";
       if (!(Number.isInteger(day) && day >= 1 && day <= 31)) return err.textContent = "O dia deve ser entre 1 e 31.";
       if (!from) return err.textContent = "Escolha o mês.";
-      if (term && !(Number.isInteger(months) && months >= 2 && months <= 360)) return err.textContent = "Informe o número de meses (de 2 a 360).";
+      if (term && !(Number.isInteger(months) && months >= 2 && months <= 360)) return err.textContent = "Informe o total de parcelas (de 2 a 360).";
+      if (term && !(Number.isInteger(curN) && curN >= 1 && curN <= months)) return err.textContent = "A parcela atual deve ser entre 1 e o total.";
       if (splitIn.checked && !(Number.isInteger(pct) && pct >= 1 && pct <= 100)) return err.textContent = "A porcentagem deve ser um número inteiro de 1 a 100.";
       const acc = accSel.value, card = acc.startsWith("card:") ? profile.cards.find(c => "card:" + c.id === acc) : null;
       let next;
@@ -3462,7 +3487,13 @@
       }
       Object.assign(next, {desc, cat: catSel.value, day, account: card ? card.name : acc});
       if (card) next.cardId = card.id; else delete next.cardId;
-      if (term) next.months = months; else delete next.months;
+      if (term){
+        // recalcula a parcela 1 a partir da parcela informada; o app só lança do 1º mês já lançado em diante
+        const baseK = isNew ? from : refK, firstLaunch = isNew ? from : (from < fixFrom(f) ? from : fixFrom(f));
+        next.months = months;
+        next.start = shiftKey(baseK, -(curN - 1));
+        if (next.start < firstLaunch) next.since = firstLaunch; else delete next.since;
+      } else { delete next.months; if (!isNew) next.start = from < fixFrom(f) ? from : fixFrom(f); delete next.since; }
       if (splitIn.checked){ next.split = true; next.pct = pct; } else { delete next.split; delete next.pct; }
       const fixed = isNew ? [...profile.fixed, next] : profile.fixed.map(x => x.id === id ? next : x);
       if (await saveProfile({...profile, fixed})){ toast(isNew ? "Despesa fixa criada" : "Despesa fixa atualizada"); go("fix"); }
@@ -3470,8 +3501,9 @@
     const end = async () => {
       const from = readFrom(); if (!from) return err.textContent = "Escolha o mês.";
       const last = shiftKey(from, -1);
-      const fixed = last < f.start ? profile.fixed.filter(x => x.id !== id) : profile.fixed.map(x => x.id === id ? {...x, end:last} : x);
-      if (await saveProfile({...profile, fixed})){ toast(last < f.start ? "Despesa fixa removida" : `Encerrada a partir de ${keyLabel(from)}`); go("fix"); }
+      const gone = last < fixFrom(f);
+      const fixed = gone ? profile.fixed.filter(x => x.id !== id) : profile.fixed.map(x => x.id === id ? {...x, end:last} : x);
+      if (await saveProfile({...profile, fixed})){ toast(gone ? "Despesa fixa removida" : `Encerrada a partir de ${keyLabel(from)}`); go("fix"); }
     };
     const remove = async () => {
       if (await saveProfile({...profile, fixed: profile.fixed.filter(x => x.id !== id)})){ toast("Despesa fixa excluída"); go("fix"); }
@@ -3486,7 +3518,6 @@
       h("div", {class:"row2"}, h("div", {}, field("Valor mensal", amtIn)), h("div", {}, field("Dia do pagamento", dayIn))),
       h("div", {class:"row2"}, h("div", {}, field("Categoria", catSel)), h("div", {}, field("Conta", accSel))),
       h("label", {text:"Duração"}), termSeg, monthsBox,
-      !isNew && f.months && h("div", {class:"hint", text:`Começou em ${keyLabel(f.start)}; com ${f.months} meses termina em ${keyLabel(fixTermEnd(f))}.`}),
       h("label", {class:"switch-row"}, h("span", {text:`Dividir com ${nameL()}`}), splitIn),
       pctBox,
       field(isNew ? "Começa em" : "Mudança de valor vale a partir de", fromIn),
