@@ -806,7 +806,7 @@
     -webkit-backdrop-filter:blur(18px) saturate(140%);backdrop-filter:blur(18px) saturate(140%);
     border:1px solid rgba(255,255,255,.2)}
   .cc-name{font-weight:600} .cc-val{font-weight:650}
-  .ccard:not([style^="--l:0;"]) .face>*{visibility:hidden}
+  .ccard:not(.top) .face>*{visibility:hidden}
   /* iPhone: desfoque (backdrop-filter) junto com a virada 3D faz o conteúdo do cartão sumir ao rolar a tela.
      Sem desfoque no cartão nem no card que segura a pilha, e as duas faces com transformação 3D explícita. */
   .face{-webkit-backdrop-filter:none;backdrop-filter:none;
@@ -2170,7 +2170,7 @@
       const {close, due} = invoiceDates(mk, card);
       const paid = isPaid(card, mk);
       const status = !f.tot ? ["Sem fatura",""] : paid ? ["Paga","ok"] : (today >= close ? ["Fechada","closed"] : ["Aberta",""]);
-      const el = h("div", {class:"ccard" + (flipped.has(card.id) && layer === 0 ? " flipped" : ""), style:`--l:${layer};--c1:${skin[0]};--c2:${skin[1]};--c3:${skin[2]}`},
+      const el = h("div", {class:"ccard" + (layer === 0 ? " top" : "") + (flipped.has(card.id) && layer === 0 ? " flipped" : ""), style:`--l:${layer};--c1:${skin[0]};--c2:${skin[1]};--c3:${skin[2]}`},
         h("div", {class:"ccard-in"},
           h("div", {class:"face front"},
             h("div", {class:"cc-row"}, h("span", {class:"cc-name", text:card.name}), h("span", {class:"cc-nfc"}, icon("nfc"))),
