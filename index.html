@@ -882,6 +882,13 @@
   .pw-wrap{position:relative}
   .logout-row{margin-top:12px}
   .login-keep{margin:12px 0 0}
+
+  /* Data e Conta lado a lado: no iPhone o campo de data tinha largura mínima própria e invadia o vizinho */
+  .row2>*{min-width:0}
+  input[type=date],input[type=month]{-webkit-appearance:none;appearance:none;display:block;width:100%;min-width:0;max-width:100%;
+    min-height:46px;line-height:1.25;text-align:left}
+  input[type=date]::-webkit-date-and-time-value,input[type=month]::-webkit-date-and-time-value{text-align:left;margin:0}
+  .row2 select{min-height:46px}
   .logout-btn{width:100%;flex:none;background:transparent;border:1px solid color-mix(in srgb, var(--red) 45%, transparent);color:var(--red)}
   .logout-btn:active{background:color-mix(in srgb, var(--red) 12%, transparent)}
   .pw-wrap input{padding-right:52px}
