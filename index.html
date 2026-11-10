@@ -849,7 +849,7 @@
   #form{display:flex;flex-direction:column}
   #form>.f-left,#form>.f-right{display:contents}
   #formTitle{order:0} #fSeg{order:1} #fAmount{order:2} #form label[for="fDesc"]{order:3} #fDesc{order:4}
-  #fCatLbl{order:5} #fCats{order:6} #newCat{order:7} #fRow{order:8} #instWrap{order:9} #splitWrap{order:10}
+  #fCatLbl{order:5} #fCats{order:6} #newCat{order:7} #fRow{order:8} #repWrap{order:9} #instWrap{order:9} #splitWrap{order:10}
   #fErr{order:11} #form>.actions{order:12}
   @media (min-width:960px){
     .sheet#form{max-width:880px;padding:26px 28px 24px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);column-gap:28px;align-items:start}
@@ -893,6 +893,8 @@
   .pw-wrap{position:relative}
   .logout-row{margin-top:12px}
   .login-keep{margin:12px 0 0}
+  #repWrap .switch-row{margin-top:14px}
+  .rep-seg{margin:10px 0 0}
 
   /* Data e Conta lado a lado: no iPhone o campo de data tinha largura mínima própria e invadia o vizinho */
   .row2>*{min-width:0}
@@ -1204,6 +1206,23 @@
         <select id="fAcc"></select>
       </div>
     </div>
+    <div id="repWrap" hidden>
+      <label class="switch-row" for="fRep">
+        <span>Repetir todo mês</span>
+        <input type="checkbox" id="fRep" class="switch">
+      </label>
+      <div id="repOpts" hidden>
+        <div class="seg rep-seg" id="repSeg">
+          <button type="button" data-rep="open" class="on">Sem prazo</button>
+          <button type="button" data-rep="term">Por meses</button>
+        </div>
+        <div id="repNWrap" hidden>
+          <label for="fRepN">Quantos meses</label>
+          <input id="fRepN" type="number" min="2" max="360" step="1" inputmode="numeric" placeholder="Ex.: 36">
+        </div>
+        <div class="hint" id="repHint"></div>
+      </div>
+    </div>
     <div id="instWrap" hidden>
       <label for="fInst">Parcelas</label>
       <select id="fInst"></select>
@@ -1308,7 +1327,8 @@
   // Perfil:
   //   cards:[{id,name,closeDay,dueDay}]  cats:{out:[{name,emoji}], in:[…]}  paid:{'cardId:YYYY-MM':true}
   //   partnerName  recurring:[{id,desc,cat,day,account,start,end?,amounts:[{from,cents}]}]
-  let txs = [];
+  let txs = [];        // tudo que os cálculos usam: lançamentos gravados + despesas fixas geradas
+  let ownTxs = [];     // só os lançamentos gravados (o que vem do armazenamento)
   let profile = normProfile({});
   let view = new Date(); view.setDate(1);
   const TABS = {resumo:"Resumo", divisao:"Divisão", analise:"Análise"};
@@ -1381,7 +1401,8 @@
       partnerName: p.partnerName && p.partnerName !== "Namorada" ? p.partnerName : "",
       myName: p.myName || "",
       accent: ["laranja","menta","azul"].includes(p.accent) ? p.accent : "laranja",
-      recurring: Array.isArray(p.recurring) ? p.recurring : []
+      recurring: Array.isArray(p.recurring) ? p.recurring : [],
+      fixed: Array.isArray(p.fixed) ? p.fixed : []
     };
   }
 
@@ -1521,6 +1542,39 @@
     }
     return out;
   }
+  // ---------- Despesas fixas (saem sozinhas todo mês; com prazo em meses ou sem prazo) ----------
+  // fixed: [{id, desc, cat, day, account, cardId?, split?, pct?, start:'YYYY-MM', months?, end?, amounts:[{from,cents}]}]
+  //   months = prazo (ex.: 36 parcelas do financiamento); end = encerrada manualmente após esse mês.
+  const isFix = t => !!t.fixed;
+  const monthsBetween = (a, b) => { const [ay,am] = a.split("-").map(Number), [by,bm] = b.split("-").map(Number); return (by-ay)*12 + (bm-am); };
+  const fixTermEnd = f => f.months ? shiftKey(f.start, f.months - 1) : null;
+  const fixLast = f => [f.end, fixTermEnd(f)].filter(Boolean).sort()[0] || null;     // último mês em que ela entra
+  function fixedTxs(untilK){
+    const out = [];
+    for (const f of profile.fixed){
+      if (!f.start) continue;
+      const last = fixLast(f), stop = last && last < untilK ? last : untilK;
+      const card = f.cardId ? profile.cards.find(c => c.id === f.cardId) : null;
+      for (let k = f.start, i = 0; k <= stop && i < 600; k = shiftKey(k, 1), i++){
+        const cents = recAmount(f, k);
+        if (!cents) continue;
+        const [y,m] = k.split("-").map(Number);
+        const t = {id:`fx-${f.id}-${k}`, fixed:f.id, virtual:true, type:"out", cents, desc:f.desc, cat:f.cat,
+                   date:`${k}-${pad(Math.min(f.day || 1, daysIn(y,m)))}`, installments:1, createdAt:0,
+                   account: card ? card.name : (f.account || ACCOUNTS[0]), fixN: i + 1, fixOf: f.months || null};
+        if (card) t.cardId = card.id;
+        if (f.split){ t.split = true; t.pct = Number.isFinite(f.pct) ? f.pct : 50; }
+        out.push(t);
+      }
+    }
+    return out;
+  }
+  // monta a lista usada pelos cálculos; as fixas vão até o mês atual ou o mês que você está vendo, o que vier depois
+  function rebuildTxs(){
+    const nowK = monthKey(new Date()), viewK = monthKey(view);
+    txs = [...ownTxs, ...fixedTxs(viewK > nowK ? viewK : nowK)];
+  }
+
   // Lançamentos do mês fora do cartão (compras dela não entram: não saíram do seu bolso)
   const monthTxs = mk => [...txs.filter(t => !t.ext && !isCard(t) && !isPartner(t) && (t.date||"").startsWith(mk)), ...recurringTxs(mk)];
 
@@ -1653,13 +1707,13 @@
         document.addEventListener("visibilitychange", () => { if (!document.hidden) soon(); });
       },
       async save(tx){
-        if (tx.ext) throw new Error("Lançamento da outra conta");
+        if (tx.ext || tx.virtual) throw new Error("Lançamento que não pode ser gravado");
         const {error} = await supa.from("transactions").upsert({user_id: me.id, id: tx.id, data: clean(tx)});
         if (error) throw error;
         soon();
       },
       async saveMany(list){
-        const rows = list.filter(t => !t.ext && !t.recurring && t.id).map(t => ({user_id: me.id, id: String(t.id), data: clean(t)}));
+        const rows = list.filter(t => !t.ext && !t.recurring && !t.virtual && t.id).map(t => ({user_id: me.id, id: String(t.id), data: clean(t)}));
         for (let i = 0; i < rows.length; i += 200){
           const {error} = await supa.from("transactions").upsert(rows.slice(i, i + 200));
           if (error) throw error;
@@ -1795,7 +1849,7 @@
     else setSync("", "Conectando…");
     store = s;
     store.subscribe(
-      list => { txs = list; render(); if ($("bdCfg").classList.contains("open")) renderCfg(); },
+      list => { ownTxs = list; render(); if ($("bdCfg").classList.contains("open")) renderCfg(); },
       p => {
         profile = normProfile(p); applyAccent(); render();
         if ($("bd").classList.contains("open")) { buildAccounts(); renderCats(); updateHints(); }
@@ -1848,6 +1902,7 @@
 
   // ---------- Render ----------
   function render(){
+    rebuildTxs();
     const sameYear = view.getFullYear() === new Date().getFullYear();
     const short = view.toLocaleDateString("pt-BR",{month:"short"}).replace(".", "").toUpperCase();
     $("monthLbl").textContent = sameYear ? short : `${short} ${String(view.getFullYear()).slice(2)}`;
@@ -1984,13 +2039,15 @@
         list.append(h("div", {class:"day", text: new Date(y, m-1, d).toLocaleDateString("pt-BR",{weekday:"long", day:"numeric", month:"short"})}));
       }
       const tags = [{t: isSettle(t) ? "Acerto" : t.cat}];
-      if (isRec(t)) tags.push({t:"Fixa", cls:"fixed"});
+      if (isRec(t) || isFix(t)) tags.push({t:"Fixa", cls:"fixed"});
       if (isSplit(t)) tags.push({t:"Dividida", cls:"split"});
       list.append(txRow({
         emoji: catIcon(t.type, t.cat), title: t.desc || t.cat, tags,
+        badge: isFix(t) && t.fixOf ? `${t.fixN}/${t.fixOf}` : null,
         meta: isSettle(t) ? keyLabel(t.settle) : accountLabel(t),
         cents: t.cents, income: t.type === "in",
-        onClick: isSettle(t) ? () => goDivision(t.settle) : isRec(t) ? () => openCfg("rec:" + t.recurring) : () => openForm(t)
+        onClick: isSettle(t) ? () => goDivision(t.settle) : isRec(t) ? () => openCfg("rec:" + t.recurring)
+               : isFix(t) ? () => openCfg("fix:" + t.fixed) : () => openForm(t)
       }));
     }
   }
@@ -2335,12 +2392,30 @@
 
   function readPct(){ const p = Number($("fPct").value); return Number.isInteger(p) && p >= 1 && p <= 100 ? p : NaN; }
 
+  let repMode = "open";
+  const repeating = () => !$("repWrap").hidden && $("fRep").checked;
   function updateHints(){
     const partner = formMode === "partner";
     const cents = parseCents($("fAmount").value);
     const date = $("fDate").value;
     const card = partner ? null : selectedCard();
-    const showInst = partner || (fType === "out" && !!card);
+    // despesa fixa: só em gasto novo seu
+    $("repWrap").hidden = partner || fType !== "out" || !!editing;
+    const rep = repeating();
+    $("repOpts").hidden = !rep;
+    document.querySelectorAll("#repSeg button").forEach(b => b.classList.toggle("on", b.dataset.rep === repMode));
+    $("repNWrap").hidden = repMode !== "term";
+    const rh = $("repHint"); rh.replaceChildren();
+    if (rep && date){
+      const start = date.slice(0,7), day = Number(date.slice(8,10)), n = Number($("fRepN").value);
+      const amt = cents > 0 ? `${brl(cents)} ` : "";
+      if (repMode === "term" && Number.isInteger(n) && n >= 2)
+        rh.append(h("b", {text:`${amt}todo dia ${day}`}), ` · ${n} meses, de ${keyLabel(start)} a ${keyLabel(shiftKey(start, n-1))}`);
+      else if (repMode === "term") rh.append("Informe em quantos meses ela termina.");
+      else rh.append(h("b", {text:`${amt}todo dia ${day}`}), ` a partir de ${keyLabel(start)}, até você encerrar`);
+      if (card) rh.append(" · entra na fatura do cartão");
+    }
+    const showInst = !rep && (partner || (fType === "out" && !!card));
     $("instWrap").hidden = !showInst;
     const n = showInst ? (Number(fInst.value) || 1) : 1;
     const parts = cents > 0 ? splitCents(cents, n) : null;
@@ -2384,6 +2459,7 @@
   }
   function openForm(tx, mode){
     if (tx && tx.ext){ toast(`Registrado na conta de ${nameL()}. Só quem registrou pode editar.`); return; }
+    if (tx && tx.virtual){ closeForm(); openCfg("fix:" + tx.fixed); return; }
     editing = tx || null;
     formMode = tx ? (isPartner(tx) ? "partner" : "me") : (mode || "me");
     const partner = formMode === "partner";
@@ -2402,6 +2478,7 @@
     $("fAcc").value = acc;
     fInst.value = String(tx ? (tx.installments||1) : 1);
     $("fSplit").checked = !!(tx && tx.split);
+    $("fRep").checked = false; repMode = "open"; $("fRepN").value = "";
     $("fPct").value = tx && Number.isFinite(tx.pct) ? tx.pct : 50;
     fCat = tx ? tx.cat : null;
     $("fErr").textContent = ""; $("newCat").classList.remove("open"); $("newCatName").value="";
@@ -2413,8 +2490,9 @@
   function closeForm(){ $("bd").classList.remove("open"); editing = null; }
 
   document.querySelectorAll("#fSeg button").forEach(b => b.addEventListener("click", () => setType(b.dataset.type)));
-  ["fAcc","fInst","fDate","fSplit"].forEach(id => $(id).addEventListener("change", updateHints));
-  ["fAmount","fPct"].forEach(id => $(id).addEventListener("input", updateHints));
+  ["fAcc","fInst","fDate","fSplit","fRep"].forEach(id => $(id).addEventListener("change", updateHints));
+  ["fAmount","fPct","fRepN"].forEach(id => $(id).addEventListener("input", updateHints));
+  document.querySelectorAll("#repSeg button").forEach(b => b.addEventListener("click", () => { repMode = b.dataset.rep; updateHints(); if (repMode === "term") $("fRepN").focus(); }));
   document.querySelectorAll("#pctQuick .chip").forEach(c => c.addEventListener("click", () => { $("fPct").value = c.dataset.p; updateHints(); }));
   $("addBtn").addEventListener("click", () => openForm(null, tab === "divisao" ? "partner" : "me"));
   $("fCancel").addEventListener("click", closeForm);
@@ -2455,6 +2533,26 @@
     const split = !partner && fType === "out" && $("fSplit").checked;
     const pct = readPct();
     if ((partner || split) && !pct) return $("fErr").textContent = "A porcentagem deve ser um número inteiro de 1 a 100.";
+
+    if (!partner && !editing && fType === "out" && repeating()){
+      const date = $("fDate").value, start = date.slice(0,7);
+      const n = Number($("fRepN").value);
+      if (repMode === "term" && !(Number.isInteger(n) && n >= 2 && n <= 360)) return $("fErr").textContent = "Informe o número de meses (de 2 a 360).";
+      const f = {id: uid(), desc: $("fDesc").value.trim() || fCat, cat: fCat, day: Number(date.slice(8,10)),
+                 account: card ? card.name : $("fAcc").value, start, amounts:[{from:start, cents}], createdAt: Date.now()};
+      if (card) f.cardId = card.id;
+      if (repMode === "term") f.months = n;
+      if (split){ f.split = true; f.pct = pct; }
+      $("fSave").disabled = true;
+      try {
+        if (!await saveProfile({...profile, fixed:[...profile.fixed, f]})) return;
+        const key = card ? invoiceKeyFor(date, card) : start;
+        const [y,m] = key.split("-").map(Number); view = new Date(y, m-1, 1);
+        closeForm(); render();
+        toast(f.months ? `Despesa fixa criada por ${f.months} meses` : "Despesa fixa criada");
+      } finally { $("fSave").disabled = false; }
+      return;
+    }
 
     const tx = {
       id: editing ? editing.id : uid(),
@@ -2977,6 +3075,7 @@
   }
   // atualiza lançamentos em série (uma escrita por vez)
   async function updateTxs(list, change){
+    list = list.filter(t => !t.virtual && !t.ext);
     for (const t of list){ await store.save({...t, ...change}); }
   }
 
@@ -2992,6 +3091,7 @@
     else if (kind === "me") content = pageMe();
     else if (kind === "look") content = pageLook();
     else if (kind === "rec") content = a ? pageRecEdit(a) : pageRec();
+    else if (kind === "fix") content = a ? pageFixEdit(a) : pageFix();
     else if (kind === "acct") content = pageAcct();
     else if (kind === "backup") content = pageBackup();
     else content = pageMenu();
@@ -3012,6 +3112,7 @@
         setRow("users", "Conta dividida", profile.partnerName || "Não definido", () => go("partner")),
         setRow("up", "Categorias de receita", String(catsFor("in").length), () => go("cats:in")),
         setRow("briefcase", "Salário e receitas fixas", recVal, () => go("rec")),
+        setRow("swap", "Despesas fixas", fixMenuVal(), () => go("fix")),
         setRow("palette", "Aparência", ({laranja:"Âmbar", menta:"Menta", azul:"Azul"})[profile.accent || "laranja"], () => go("look"))),
       h("div", {class:"set-group", style:"margin-top:12px"},
         store && store.mode === "supabase" && setRow("users", "Compartilhamento", me ? me.email : "", () => go("acct")),
@@ -3073,8 +3174,8 @@
   }
 
   // ----- Categorias -----
-  const catUse = (type, nm) => txs.filter(t => !t.ext && t.type === type && t.cat === nm && !isSettle(t)).length
-                             + (type === "in" ? profile.recurring.filter(r => r.cat === nm).length : 0);
+  const catUse = (type, nm) => ownTxs.filter(t => !t.ext && t.type === type && t.cat === nm && !isSettle(t)).length
+                             + (type === "in" ? profile.recurring.filter(r => r.cat === nm).length : profile.fixed.filter(f => f.cat === nm).length);
   function pageCats(type){
     const label = type === "out" ? "Categorias de gasto" : "Categorias de receita";
     return [
@@ -3112,7 +3213,8 @@
       else next = list.map((x, i) => i === Number(idx) ? {name:nm, emoji:em, icon:pick, need} : x);
       const renamed = !isNew && nm !== c.name;
       const recurring = renamed && type === "in" ? profile.recurring.map(r => r.cat === c.name ? {...r, cat:nm} : r) : profile.recurring;
-      if (!await saveProfile({...profile, cats:{...profile.cats, [type]: next}, recurring})) return;
+      const fixed = renamed && type === "out" ? profile.fixed.map(f => f.cat === c.name ? {...f, cat:nm} : f) : profile.fixed;
+      if (!await saveProfile({...profile, cats:{...profile.cats, [type]: next}, recurring, fixed})) return;
       if (renamed){
         const affected = txs.filter(t => !t.ext && t.type === type && t.cat === c.name && !isSettle(t));
         if (affected.length){ toast(`Atualizando ${plural(affected.length, "lançamento", "lançamentos")}…`); await updateTxs(affected, {cat:nm}); }
@@ -3122,7 +3224,8 @@
     const del = async () => {
       const next = list.filter((_, i) => i !== Number(idx));
       const recurring = type === "in" ? profile.recurring.map(r => r.cat === c.name ? {...r, cat:"Outros"} : r) : profile.recurring;
-      if (!await saveProfile({...profile, cats:{...profile.cats, [type]: next}, recurring})) return;
+      const fixed = type === "out" ? profile.fixed.map(f => f.cat === c.name ? {...f, cat:"Outros"} : f) : profile.fixed;
+      if (!await saveProfile({...profile, cats:{...profile.cats, [type]: next}, recurring, fixed})) return;
       const affected = txs.filter(t => !t.ext && t.type === type && t.cat === c.name && !isSettle(t));
       if (affected.length){ toast(`Movendo ${plural(affected.length, "lançamento", "lançamentos")} para Outros…`); await updateTxs(affected, {cat:"Outros"}); }
       toast("Categoria excluída"); go(back);
@@ -3236,7 +3339,7 @@
         }}))
       ];
     }
-    const json = JSON.stringify({v:1, exportedAt: new Date().toISOString(), profile, txs: txs.filter(t => !t.ext)});
+    const json = JSON.stringify({v:1, exportedAt: new Date().toISOString(), profile, txs: ownTxs.filter(t => !t.ext)});
     const area = h("textarea", {id:"backupOut", class:"backup-area", readonly:true});
     area.value = json;
     return [
@@ -3276,6 +3379,131 @@
   }
 
   // ----- Salário e receitas fixas -----
+  // ----- Despesas fixas -----
+  const fixActive = (f, k) => k >= f.start && (!fixLast(f) || k <= fixLast(f));
+  function fixMenuVal(){
+    const cur = monthKey(new Date());
+    const act = profile.fixed.filter(f => fixActive(f, cur));
+    if (!act.length) return profile.fixed.length ? "Nenhuma ativa" : "Nenhuma";
+    return `${plural(act.length, "ativa", "ativas")} · ${brl(act.reduce((s,f) => s + (recAmount(f, cur) || 0), 0))}/mês`;
+  }
+  function fixStatus(f){
+    const cur = monthKey(new Date()), last = fixLast(f);
+    if (cur < f.start) return `começa em ${keyLabel(f.start)} · ${brl(recAmount(f, f.start) || 0)}`;
+    if (last && cur > last) return f.months && !f.end ? `concluída em ${keyLabel(last)}` : `encerrada em ${keyLabel(last)}`;
+    const parts = [brl(recAmount(f, cur) || 0), `dia ${f.day}`];
+    if (f.months) parts.push(`${monthsBetween(f.start, cur) + 1}/${f.months}`);
+    return parts.join(" · ");
+  }
+  function pageFix(){
+    const cur = monthKey(new Date());
+    const act = profile.fixed.filter(f => fixActive(f, cur)), rest = profile.fixed.filter(f => !fixActive(f, cur));
+    const total = act.reduce((s,f) => s + (recAmount(f, cur) || 0), 0);
+    return [
+      pageHead("Despesas fixas", "menu"),
+      h("div", {class:"hint", style:"margin:0 4px 12px", text: act.length
+        ? `Saem sozinhas todo mês, no dia escolhido. Total deste mês: ${brl(total)}.`
+        : "Saem sozinhas todo mês, no dia escolhido. Crie pelo + marcando “Repetir todo mês”, ou aqui."}),
+      h("div", {class:"set-group"},
+        [...act, ...rest].map(f => setRow(catIcon("out", f.cat), f.desc, fixStatus(f), () => go("fix:" + f.id))),
+        addRow("Adicionar despesa fixa", () => go("fix:new")))
+    ];
+  }
+  function pageFixEdit(id){
+    const isNew = id === "new";
+    const cur = monthKey(new Date());
+    const f = isNew ? {desc:"", cat:"Contas", day:10, account:ACCOUNTS[0], start:cur, amounts:[]} : profile.fixed.find(x => x.id === id);
+    if (!f) return pageFix();
+    const refK = cur < f.start ? f.start : cur;
+    const descIn = h("input", {maxlength:40, placeholder:"Ex.: Financiamento do carro, Netflix", value:f.desc});
+    const amtIn = h("input", {class:"num", inputmode:"decimal", placeholder:"R$ 0,00", value: isNew ? "" : centsInput(recAmount(f, refK) || 0)});
+    const dayIn = h("input", {type:"number", min:1, max:31, inputmode:"numeric", value:f.day});
+    const catSel = h("select", {}, catsFor("out").map(c => h("option", {value:c.name, text:c.name})));
+    catSel.value = catsFor("out").some(c => c.name === f.cat) ? f.cat : "Outros";
+    const accSel = h("select", {}, ACCOUNTS.map(a => h("option", {value:a, text:a})), profile.cards.map(c => h("option", {value:"card:" + c.id, text:`💳 ${c.name}`})));
+    accSel.value = f.cardId && profile.cards.some(c => c.id === f.cardId) ? "card:" + f.cardId : (ACCOUNTS.includes(f.account) ? f.account : ACCOUNTS[0]);
+    let term = !!f.months;
+    const termSeg = h("div", {class:"seg rep-seg"});
+    const monthsIn = h("input", {type:"number", min:2, max:360, inputmode:"numeric", placeholder:"Ex.: 36", value: f.months || ""});
+    const monthsBox = h("div", {}, field("Quantos meses no total", monthsIn));
+    const paintTerm = () => {
+      termSeg.replaceChildren(
+        h("button", {type:"button", class: term ? "" : "on", text:"Sem prazo", onclick: () => { term = false; paintTerm(); }}),
+        h("button", {type:"button", class: term ? "on" : "", text:"Por meses", onclick: () => { term = true; paintTerm(); }}));
+      monthsBox.hidden = !term;
+    };
+    paintTerm();
+    const splitIn = h("input", {type:"checkbox", class:"switch", checked: !!f.split});
+    const pctIn = h("input", {type:"number", min:1, max:100, inputmode:"numeric", value: Number.isFinite(f.pct) ? f.pct : 50});
+    const pctBox = h("div", {}, field(`Parte de ${nameL()} (%)`, pctIn));
+    const paintSplit = () => { pctBox.hidden = !splitIn.checked; };
+    splitIn.addEventListener("change", paintSplit); paintSplit();
+    const fromIn = h("input", {type:"month", value: refK});
+    const err = errBox();
+    const readFrom = () => /^\d{4}-\d{2}$/.test(fromIn.value) ? fromIn.value : null;
+
+    const save = async () => {
+      const desc = descIn.value.trim(), cents = parseCents(amtIn.value), day = Number(dayIn.value), from = readFrom();
+      const months = Number(monthsIn.value), pct = Number(pctIn.value);
+      if (!desc) return err.textContent = "Dê um nome, como “Financiamento do carro”.";
+      if (!(cents > 0)) return err.textContent = "Informe um valor maior que zero.";
+      if (!(Number.isInteger(day) && day >= 1 && day <= 31)) return err.textContent = "O dia deve ser entre 1 e 31.";
+      if (!from) return err.textContent = "Escolha o mês.";
+      if (term && !(Number.isInteger(months) && months >= 2 && months <= 360)) return err.textContent = "Informe o número de meses (de 2 a 360).";
+      if (splitIn.checked && !(Number.isInteger(pct) && pct >= 1 && pct <= 100)) return err.textContent = "A porcentagem deve ser um número inteiro de 1 a 100.";
+      const acc = accSel.value, card = acc.startsWith("card:") ? profile.cards.find(c => "card:" + c.id === acc) : null;
+      let next;
+      if (isNew) next = {id: uid(), start: from, amounts:[{from, cents}], createdAt: Date.now()};
+      else {
+        next = {...f, amounts:[...(f.amounts||[])]};
+        if (recAmount(f, from) !== cents){ next.amounts = next.amounts.filter(a => a.from !== from); next.amounts.push({from, cents}); }
+        if (from < next.start) next.start = from;
+        if (next.end && from > next.end) delete next.end;            // reativa se estava encerrada
+      }
+      Object.assign(next, {desc, cat: catSel.value, day, account: card ? card.name : acc});
+      if (card) next.cardId = card.id; else delete next.cardId;
+      if (term) next.months = months; else delete next.months;
+      if (splitIn.checked){ next.split = true; next.pct = pct; } else { delete next.split; delete next.pct; }
+      const fixed = isNew ? [...profile.fixed, next] : profile.fixed.map(x => x.id === id ? next : x);
+      if (await saveProfile({...profile, fixed})){ toast(isNew ? "Despesa fixa criada" : "Despesa fixa atualizada"); go("fix"); }
+    };
+    const end = async () => {
+      const from = readFrom(); if (!from) return err.textContent = "Escolha o mês.";
+      const last = shiftKey(from, -1);
+      const fixed = last < f.start ? profile.fixed.filter(x => x.id !== id) : profile.fixed.map(x => x.id === id ? {...x, end:last} : x);
+      if (await saveProfile({...profile, fixed})){ toast(last < f.start ? "Despesa fixa removida" : `Encerrada a partir de ${keyLabel(from)}`); go("fix"); }
+    };
+    const remove = async () => {
+      if (await saveProfile({...profile, fixed: profile.fixed.filter(x => x.id !== id)})){ toast("Despesa fixa excluída"); go("fix"); }
+    };
+    const hist = !isNew && (f.amounts||[]).length > 1
+      ? h("div", {class:"hint", text: "Histórico: " + [...f.amounts].sort((x,y) => x.from.localeCompare(y.from)).map(a => `${brl(a.cents)} desde ${keyLabel(a.from)}`).join(" · ")})
+      : null;
+    const last = isNew ? null : fixLast(f);
+    return [
+      pageHead(isNew ? "Nova despesa fixa" : f.desc, "fix", "Despesas fixas"),
+      field("Nome", descIn),
+      h("div", {class:"row2"}, h("div", {}, field("Valor mensal", amtIn)), h("div", {}, field("Dia do pagamento", dayIn))),
+      h("div", {class:"row2"}, h("div", {}, field("Categoria", catSel)), h("div", {}, field("Conta", accSel))),
+      h("label", {text:"Duração"}), termSeg, monthsBox,
+      !isNew && f.months && h("div", {class:"hint", text:`Começou em ${keyLabel(f.start)}; com ${f.months} meses termina em ${keyLabel(fixTermEnd(f))}.`}),
+      h("label", {class:"switch-row"}, h("span", {text:`Dividir com ${nameL()}`}), splitIn),
+      pctBox,
+      field(isNew ? "Começa em" : "Mudança de valor vale a partir de", fromIn),
+      h("div", {class:"hint", text: isNew
+        ? "Os meses a partir deste recebem o gasto automaticamente."
+        : "Se mudar o valor, os meses anteriores continuam com o valor antigo. “Encerrar” para de lançar a partir deste mês."}),
+      hist,
+      f.end && h("div", {class:"hint", text:`Encerrada após ${keyLabel(f.end)}. Salvar reativa a partir do mês escolhido.`}),
+      !f.end && last && last < cur && h("div", {class:"hint", text:`Concluída: a última vez foi em ${keyLabel(last)}.`}),
+      err,
+      h("div", {class:"actions"},
+        !isNew && confirmBtn("Encerrar", "Confirmar?", end),
+        h("button", {type:"button", class:"btn primary", text:"Salvar", onclick: save})),
+      !isNew && h("div", {style:"text-align:center;margin-top:10px"}, confirmBtn("Excluir de todos os meses", "Toque de novo para excluir tudo", remove, "link-btn"))
+    ];
+  }
+
   function pageRec(){
     const cur = monthKey(new Date());
     return [
