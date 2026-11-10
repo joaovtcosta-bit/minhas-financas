@@ -1028,13 +1028,13 @@
     </div>
     <div class="pair">
       <div class="card"><div class="eyebrow">Você pagou</div><div class="val num" id="dMineTot">R$ 0,00</div><div class="sub-lbl" id="dMineOwed"></div></div>
-      <div class="card"><div class="eyebrow" id="dHersLbl">Ela pagou</div><div class="val num" id="dHersTot">R$ 0,00</div><div class="sub-lbl" id="dHersOwed"></div></div>
+      <div class="card"><div class="eyebrow" id="dHersLbl">Outra pessoa pagou</div><div class="val num" id="dHersTot">R$ 0,00</div><div class="sub-lbl" id="dHersOwed"></div></div>
     </div>
 </div>
 
     <div class="grid-cols even">
     <div>
-    <div class="sec-head"><h2 id="dHersTitle">Ela pagou</h2><span class="count" id="dHersCount"></span></div>
+    <div class="sec-head"><h2 id="dHersTitle">Outra pessoa pagou</h2><span class="count" id="dHersCount"></span></div>
     <div class="list" id="dHersList"></div>
     </div>
 
@@ -1212,7 +1212,7 @@
         <input type="checkbox" id="fSplit" class="switch">
       </label>
       <div id="pctWrap" hidden>
-        <label for="fPct" id="pctLbl">Parte dela (%)</label>
+        <label for="fPct" id="pctLbl">Parte da outra pessoa (%)</label>
         <div class="pct-row">
           <input id="fPct" type="number" min="1" max="100" step="1" inputmode="numeric">
           <div class="pct-quick" id="pctQuick">
@@ -1317,7 +1317,9 @@
   const shiftKey = (key, n) => { const [y,m] = key.split("-").map(Number); return monthKey(new Date(y, m-1+n, 1)); };
   const keyLabel = (key, opt={month:"short", year:"numeric"}) => { const [y,m]=key.split("-").map(Number); return new Date(y,m-1,1).toLocaleDateString("pt-BR",opt); };
   const dayLabel = date => { const [y,m,d] = date.split("-").map(Number); return new Date(y,m-1,d).toLocaleDateString("pt-BR",{day:"2-digit",month:"short"}); };
-  const name = () => profile.partnerName || "Namorada";
+  // nome de quem divide com você; sem nome definido, textos neutros
+  const name  = () => profile.partnerName || "Outra pessoa";   // início de frase
+  const nameL = () => profile.partnerName || "outra pessoa";   // meio de frase
   const plural = (n, s, p) => `${n} ${n === 1 ? s : p}`;
 
   // Cria elementos: h("div", {class:"x", text:"oi", onclick:fn}, filhos…)
@@ -1365,7 +1367,7 @@
       cards,
       cats:{out:mkCats("out"), in:mkCats("in")},
       paid: p.paid || {},
-      partnerName: p.partnerName || "Namorada",
+      partnerName: p.partnerName && p.partnerName !== "Namorada" ? p.partnerName : "",
       myName: p.myName || "",
       accent: ["laranja","menta","azul"].includes(p.accent) ? p.accent : "laranja",
       recurring: Array.isArray(p.recurring) ? p.recurring : []
@@ -1853,7 +1855,7 @@
     $("tabResumo").hidden = tab !== "resumo";
     $("tabDiv").hidden = tab !== "divisao";
     $("tabAna").hidden = tab !== "analise";
-    $("addBtn").setAttribute("aria-label", tab === "divisao" ? `Nova compra de ${name()}` : "Novo lançamento");
+    $("addBtn").setAttribute("aria-label", tab === "divisao" ? `Nova compra de ${nameL()}` : "Novo lançamento");
     renderSafe(cardItems());
     if (tab === "resumo") renderResumo(); else if (tab === "divisao") renderDivision(); else renderAnalysis();
   }
@@ -2229,10 +2231,10 @@
   function renderDivision(){
     const mk = monthKey(view);
     const st = divisionState(mk);
-    const nm = name();
+    const nm = name(), nmL = nameL();
 
     const tot = st.total;
-    $("dLbl").textContent = tot > 0 ? `${nm} te deve` : tot < 0 ? `Você deve a ${nm}` : "Tudo acertado";
+    $("dLbl").textContent = tot > 0 ? `${nm} te deve` : tot < 0 ? `Você deve a ${nmL}` : "Tudo acertado";
     $("dVal").textContent = brl(Math.abs(tot));
     const det = [];
     det.push(`Este mês: ${st.monthNet === 0 ? "sem diferença" : (st.monthNet > 0 ? `${nm} te deve ${brl(st.monthNet)}` : `você deve ${brl(-st.monthNet)}`)}`);
@@ -2262,16 +2264,16 @@
     });
     $("dHersCount").textContent = plural(hers.length, "item", "itens");
     $("dMineCount").textContent = plural(mine.length, "item", "itens");
-    $("dHersList").replaceChildren(...(hers.length ? hers.map(i => row(i, "sua parte")) : [emptyRow(`Nenhuma compra de ${nm} neste mês. Toque no + para registrar.`)]));
-    $("dMineList").replaceChildren(...(mine.length ? mine.map(i => row(i, `${nm}:`)) : [emptyRow(`Nada dividido neste mês. Ao lançar uma despesa, ligue "Dividir com ${nm}".`)]));
+    $("dHersList").replaceChildren(...(hers.length ? hers.map(i => row(i, "sua parte")) : [emptyRow(`Nenhuma compra de ${nmL} neste mês. Toque no + para registrar.`)]));
+    $("dMineList").replaceChildren(...(mine.length ? mine.map(i => row(i, `${nm}:`)) : [emptyRow(`Nada dividido neste mês. Ao lançar uma despesa, ligue "Dividir com ${nmL}".`)]));
 
     $("dSetSec").hidden = !st.settles.length;
     $("dSetList").replaceChildren(...st.settles.map(t => txRow({
-      emoji: catIcon("out", SETTLE_CAT), title: t.type === "in" ? `${nm} te pagou` : `Você pagou a ${nm}`,
-      meta: t.ext ? `${dayLabel(t.date)} · registrado por ${name()}` : `${dayLabel(t.date)} · toque 2x para excluir`, cents: t.cents, income: t.type === "in",
+      emoji: catIcon("out", SETTLE_CAT), title: t.type === "in" ? `${nm} te pagou` : `Você pagou a ${nmL}`,
+      meta: t.ext ? `${dayLabel(t.date)} · registrado por ${nameL()}` : `${dayLabel(t.date)} · toque 2x para excluir`, cents: t.cents, income: t.type === "in",
       status: {t:"Acertado", cls:"ok"},
       onClick: async (b, a) => {
-        if (t.ext){ toast(`Registrado na conta de ${name()}`); return; }
+        if (t.ext){ toast(`Registrado na conta de ${nameL()}`); return; }
         if (!b.classList.contains("confirm")){ b.classList.add("confirm"); a.textContent = "Excluir?"; return; }
         try { await store.remove(t.id); render(); toast("Acerto excluído"); } catch { toast("Não foi possível excluir"); }
       }
@@ -2297,7 +2299,7 @@
     if (!b.dataset.confirm){ b.dataset.confirm = "1"; b.textContent = "Toque de novo para confirmar"; return; }
     const tx = {
       id: uid(), type: tot > 0 ? "in" : "out", cents: Math.abs(tot), cat: SETTLE_CAT,
-      desc: tot > 0 ? `Acerto com ${name()} (recebido)` : `Acerto com ${name()} (pago)`,
+      desc: tot > 0 ? `Acerto com ${nameL()} (recebido)` : `Acerto com ${nameL()} (pago)`,
       date: ymd(new Date()), account: "Pix / Carteira digital", installments: 1, settle: mk, createdAt: Date.now()
     };
     b.disabled = true;
@@ -2343,10 +2345,10 @@
     const showSplit = partner || fType === "out";
     $("splitWrap").hidden = !showSplit;
     $("splitRow").hidden = partner;
-    $("splitLbl").textContent = `Dividir com ${name()}`;
+    $("splitLbl").textContent = `Dividir com ${nameL()}`;
     const on = partner || $("fSplit").checked;
     $("pctWrap").hidden = !(showSplit && on);
-    $("pctLbl").textContent = partner ? "Sua parte (%)" : `Parte de ${name()} (%)`;
+    $("pctLbl").textContent = partner ? "Sua parte (%)" : `Parte de ${nameL()} (%)`;
     const p = readPct();
     document.querySelectorAll("#pctQuick .chip").forEach(c => c.classList.toggle("on", Number(c.dataset.p) === p));
     const sh = $("splitHint"); sh.replaceChildren();
@@ -2370,12 +2372,12 @@
       h("button", {type:"button", class:"chip", onclick: () => { $("newCat").classList.add("open"); $("newCatName").focus(); }}, icon("plus"), h("span", {text:"Nova"})));
   }
   function openForm(tx, mode){
-    if (tx && tx.ext){ toast(`Registrado na conta de ${name()} — só ela pode editar`); return; }
+    if (tx && tx.ext){ toast(`Registrado na conta de ${nameL()}. Só quem registrou pode editar.`); return; }
     editing = tx || null;
     formMode = tx ? (isPartner(tx) ? "partner" : "me") : (mode || "me");
     const partner = formMode === "partner";
     $("formTitle").textContent = partner
-      ? (tx ? `Editar compra de ${name()}` : `Compra de ${name()}`)
+      ? (tx ? `Editar compra de ${nameL()}` : `Compra de ${nameL()}`)
       : (tx ? "Editar lançamento" : "Novo lançamento");
     $("fSeg").hidden = partner;
     $("fAccWrap").hidden = partner;
@@ -2837,7 +2839,7 @@
       h("div", {class:"mc-row mc-head"}, head("name", "Estabelecimento", "l"), head("visits", "Visitas"), head("avg", "Média"), head("last", "Última"), head("total", "Total"), h("span", {class:"mc-h l", text:"Participação"})),
       ...(rows.length ? rows.slice(0, 60).map(g => h("div", {class:"mc-row"},
         h("div", {class:"mc-nm"}, h("span", {class:"avatar"}, catIcon("out", g.cat)),
-          h("div", {style:"min-width:0"}, h("b", {text:g.name}), h("small", {text: g.cat + (g.her ? ` · ${g.her === g.visits ? name() : "você e " + name()}` : "")}))),
+          h("div", {style:"min-width:0"}, h("b", {text:g.name}), h("small", {text: g.cat + (g.her ? ` · ${g.her === g.visits ? name() : "você e " + nameL()}` : "")}))),
         h("span", {class:"mc-c num", "data-l": g.visits === 1 ? "visita" : "visitas", text:String(g.visits)}),
         h("span", {class:"mc-c num", "data-l":"média", text:brl(g.avg)}),
         h("span", {class:"mc-c", "data-l":"última", text: shortDate(parseDate(g.last))}),
@@ -2996,7 +2998,7 @@
         setRow("user", "Seu nome", profile.myName || "Não definido", () => go("me")),
         setRow("card", "Cartões de crédito", plural(profile.cards.length, "cartão", "cartões"), () => go("cards")),
         setRow("down", "Categorias de gasto", String(catsFor("out").length), () => go("cats:out")),
-        setRow("users", "Conta dividida", name(), () => go("partner")),
+        setRow("users", "Conta dividida", profile.partnerName || "Não definido", () => go("partner")),
         setRow("up", "Categorias de receita", String(catsFor("in").length), () => go("cats:in")),
         setRow("briefcase", "Salário e receitas fixas", recVal, () => go("rec")),
         setRow("palette", "Aparência", ({laranja:"Âmbar", menta:"Menta", azul:"Azul"})[profile.accent || "laranja"], () => go("look"))),
