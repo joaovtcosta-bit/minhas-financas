@@ -843,7 +843,19 @@
   .login-msg{font-size:14px;color:var(--muted);min-height:18px;margin-top:8px;text-align:center}
   .login-msg.bad{color:var(--red)}
   .login-field{display:grid}
+
+  /* faixa escura atrás da barra inferior (celular e tablet): o conteúdo some antes de chegar embaixo */
+  .bottom-shade{position:fixed;left:0;right:0;bottom:0;z-index:4;pointer-events:none;
+    height:calc(118px + env(safe-area-inset-bottom,0px));
+    background:linear-gradient(to bottom, rgba(10,11,11,0), rgba(10,11,11,.88) 42%, #0a0b0b 72%);
+    -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px);
+    -webkit-mask-image:linear-gradient(to bottom, transparent, #000 38%);mask-image:linear-gradient(to bottom, transparent, #000 38%)}
+  @media (max-width:959px){ .wrap{padding-bottom:calc(132px + env(safe-area-inset-bottom,0px))} }
+  @media (min-width:960px){ .bottom-shade{display:none} }
   .pw-wrap{position:relative}
+  .logout-row{margin-top:12px}
+  .logout-btn{width:100%;flex:none;background:transparent;border:1px solid color-mix(in srgb, var(--red) 45%, transparent);color:var(--red)}
+  .logout-btn:active{background:color-mix(in srgb, var(--red) 12%, transparent)}
   .pw-wrap input{padding-right:52px}
   .pw-eye{position:absolute;top:50%;right:6px;transform:translateY(-50%);width:40px;height:40px;border:0;border-radius:12px;
     background:transparent;color:var(--muted);display:grid;place-items:center;cursor:pointer}
@@ -1092,6 +1104,7 @@
 </div>
 
 <!-- ===== Barra inferior ===== -->
+<div class="bottom-shade" aria-hidden="true"></div>
 <nav class="tabbar" id="tabs">
   <div class="brand"><span class="brand-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9l8-5 8 5v10"/><path d="M9 19v-5.5h6V19"/><path d="M4 19h16"/></svg></span><div><b>Minhas Finanças</b><small>Controle pessoal</small></div></div>
   <button type="button" data-tab="resumo" class="on">
@@ -2939,6 +2952,8 @@
       h("div", {class:"set-group", style:"margin-top:12px"},
         store && store.mode === "supabase" && setRow("users", "Compartilhamento", me ? me.email : "", () => go("acct")),
         setRow("box", "Backup dos dados", store && store.mode === "supabase" ? "Importar" : "Copiar", () => go("backup"))),
+      store && store.mode === "supabase" && h("div", {class:"logout-row"},
+        confirmBtn("Sair da conta", "Toque de novo para sair", async () => { await supa.auth.signOut(); location.reload(); }, "btn logout-btn")),
       h("div", {class:"actions"}, h("button", {type:"button", class:"btn ghost", text:"Fechar", onclick: closeCfg}))
     ];
   }
@@ -3131,8 +3146,7 @@
       pageHead("Compartilhamento", "menu"),
       h("div", {class:"set-group"}, setRow("user", "Conectado como", me ? me.email : "", () => {})),
       h("h4", {text:"Compartilhar a Divisão"}),
-      body, err,
-      h("div", {class:"actions"}, confirmBtn("Sair da conta", "Toque de novo para sair", async () => { await supa.auth.signOut(); location.reload(); }, "btn ghost"))
+      body, err
     ];
   }
 
