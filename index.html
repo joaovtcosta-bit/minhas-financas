@@ -807,6 +807,17 @@
     border:1px solid rgba(255,255,255,.2)}
   .cc-name{font-weight:600} .cc-val{font-weight:650}
   .ccard:not([style^="--l:0;"]) .face>*{visibility:hidden}
+  /* iPhone: desfoque (backdrop-filter) junto com a virada 3D faz o conteúdo do cartão sumir ao rolar a tela.
+     Sem desfoque no cartão nem no card que segura a pilha, e as duas faces com transformação 3D explícita. */
+  .face{-webkit-backdrop-filter:none;backdrop-filter:none;
+    background:
+      radial-gradient(120% 90% at 0% 0%, rgba(255,255,255,.22), transparent 45%),
+      linear-gradient(135deg, var(--c1), var(--c2) 55%, var(--c3))}
+  .face.front{-webkit-transform:rotateY(0deg) translateZ(1px);transform:rotateY(0deg) translateZ(1px)}
+  .face.back{-webkit-transform:rotateY(180deg) translateZ(1px);transform:rotateY(180deg) translateZ(1px)}
+  .card.stack-card{-webkit-backdrop-filter:none;backdrop-filter:none;background:linear-gradient(180deg,rgba(255,255,255,.075),rgba(255,255,255,.035)),rgba(16,17,17,.72)}
+  .ccard,.ccard-in{-webkit-transform-style:preserve-3d}
+  .ccard-in{will-change:transform}
   .cc-nfc{display:grid;place-items:center;opacity:.85} .cc-nfc svg{width:20px;height:20px}
   .cc-st{font-weight:600}
 
