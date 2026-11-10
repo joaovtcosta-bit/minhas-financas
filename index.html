@@ -895,6 +895,8 @@
   .login-keep{margin:12px 0 0}
   #repWrap .switch-row{margin-top:14px}
   .rep-seg{margin:10px 0 0}
+  .fixm-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:2px 4px 12px}
+  .fixm-val{font-size:28px;font-weight:700;letter-spacing:-.02em}
 
   /* Data e Conta lado a lado: no iPhone o campo de data tinha largura mínima própria e invadia o vizinho */
   .row2>*{min-width:0}
@@ -1548,6 +1550,9 @@
   // fixed: [{id, desc, cat, day, account, cardId?, split?, pct?, start:'YYYY-MM', months?, end?, amounts:[{from,cents}]}]
   //   months = prazo (ex.: 36 parcelas do financiamento); end = encerrada manualmente após esse mês.
   //   start = mês da parcela 1; since = mês a partir do qual o app lança (cadastro no meio: parcela 28 de 36).
+  //   day = dia do vencimento. paid = {'YYYY-MM': {date, cents}}: meses marcados como pagos (só fora do cartão).
+  //   Status no mês: Pago (marcado) · Atrasado (passou do vencimento) · Pendente. Sem pagar, conta como previsão;
+  //   no mês atual, uma conta atrasada fica com a data de hoje (ainda não saiu da conta).
   const isFix = t => !!t.fixed;
   const monthsBetween = (a, b) => { const [ay,am] = a.split("-").map(Number), [by,bm] = b.split("-").map(Number); return (by-ay)*12 + (bm-am); };
   const fixTermEnd = f => f.months ? shiftKey(f.start, f.months - 1) : null;
@@ -1565,10 +1570,23 @@
         const cents = recAmount(f, k);
         if (!cents) continue;
         const [y,m] = k.split("-").map(Number);
-        const t = {id:`fx-${f.id}-${k}`, fixed:f.id, virtual:true, type:"out", cents, desc:f.desc, cat:f.cat,
-                   date:`${k}-${pad(Math.min(f.day || 1, daysIn(y,m)))}`, installments:1, createdAt:0,
+        const due = `${k}-${pad(Math.min(f.day || 1, daysIn(y,m)))}`;
+        const t = {id:`fx-${f.id}-${k}`, fixed:f.id, fixK:k, virtual:true, type:"out", cents, desc:f.desc, cat:f.cat,
+                   date:due, due, installments:1, createdAt:0,
                    account: card ? card.name : (f.account || ACCOUNTS[0]), fixN: i + 1, fixOf: f.months || null};
         if (card) t.cardId = card.id;
+        else {
+          const pay = f.paid && f.paid[k];
+          if (pay){
+            t.fixState = "paid"; t.paidOn = pay.date;
+            if (pay.cents > 0) t.cents = pay.cents;
+            if (pay.date && pay.date.startsWith(k)) t.date = pay.date;     // sai da conta no dia em que foi pago
+          } else {
+            const today = ymd(new Date());
+            t.fixState = today > due ? "late" : "pending";
+            if (today > due && k === today.slice(0,7)) t.date = today;   // atrasada no mês atual: ainda é previsão
+          }
+        }
         if (f.split){ t.split = true; t.pct = Number.isFinite(f.pct) ? f.pct : 50; }
         out.push(t);
       }
@@ -2052,9 +2070,11 @@
       list.append(txRow({
         emoji: catIcon(t.type, t.cat), title: t.desc || t.cat, tags,
         badge: isFix(t) && t.fixOf ? `${t.fixN}/${t.fixOf}` : null,
-        meta: isSettle(t) ? keyLabel(t.settle) : accountLabel(t),
+        meta: isSettle(t) ? keyLabel(t.settle) : t.fixState ? fixMeta(t) : accountLabel(t),
         cents: t.cents, income: t.type === "in",
+        status: t.fixState ? FIX_STATE[t.fixState] : undefined,
         onClick: isSettle(t) ? () => goDivision(t.settle) : isRec(t) ? () => openCfg("rec:" + t.recurring)
+               : t.fixState ? () => openCfg(`fixm:${t.fixed}:${t.fixK}`)
                : isFix(t) ? () => openCfg("fix:" + t.fixed) : () => openForm(t)
       }));
     }
@@ -2420,13 +2440,14 @@
       const amt = cents > 0 ? `${brl(cents)} ` : "";
       if (repMode === "term" && Number.isInteger(n) && n >= 2 && Number.isInteger(curN) && curN >= 1 && curN <= n){
         const left = n - curN + 1;
-        rh.append(h("b", {text:`${amt}todo dia ${day}`}), ` · parcela ${curN} de ${n} em ${keyLabel(start)}; ` +
+        rh.append(h("b", {text:`${amt}vence todo dia ${day}`}), ` · parcela ${curN} de ${n} em ${keyLabel(start)}; ` +
           (left === 1 ? "é a última." : `${left === n ? "" : "faltam "}${left} meses, até ${keyLabel(shiftKey(start, left-1))}`));
       }
       else if (repMode === "term" && curN > n) rh.append("A parcela atual não pode ser maior que o total.");
       else if (repMode === "term") rh.append("Informe o total de parcelas.");
-      else rh.append(h("b", {text:`${amt}todo dia ${day}`}), ` a partir de ${keyLabel(start)}, até você encerrar`);
+      else rh.append(h("b", {text:`${amt}vence todo dia ${day}`}), ` a partir de ${keyLabel(start)}, até você encerrar`);
       if (card) rh.append(" · entra na fatura do cartão");
+      else rh.append(" · fica pendente até você marcar como paga");
     }
     const showInst = !rep && (partner || (fType === "out" && !!card));
     $("instWrap").hidden = !showInst;
@@ -3106,6 +3127,7 @@
     else if (kind === "look") content = pageLook();
     else if (kind === "rec") content = a ? pageRecEdit(a) : pageRec();
     else if (kind === "fix") content = a ? pageFixEdit(a) : pageFix();
+    else if (kind === "fixm") content = pageFixMonth(a, b);
     else if (kind === "acct") content = pageAcct();
     else if (kind === "backup") content = pageBackup();
     else content = pageMenu();
@@ -3395,6 +3417,10 @@
   // ----- Salário e receitas fixas -----
   // ----- Despesas fixas -----
   const fixActive = (f, k) => k >= fixFrom(f) && (!fixLast(f) || k <= fixLast(f));
+  const FIX_STATE = {paid:{t:"Pago", cls:"ok"}, late:{t:"Atrasado", cls:"closed"}, pending:{t:"Pendente"}};
+  const ddmm = d => { const [, m, dd] = d.split("-"); return `${dd}/${m}`; };
+  const fixMeta = t => t.fixState === "paid" ? `pago em ${ddmm(t.paidOn || t.date)} · ${accountLabel(t)}`
+                                               : `vence ${ddmm(t.due)} · ${accountLabel(t)}`;
   function fixMenuVal(){
     const cur = monthKey(new Date());
     const act = profile.fixed.filter(f => fixActive(f, cur));
@@ -3405,7 +3431,11 @@
     const cur = monthKey(new Date()), last = fixLast(f);
     if (cur < fixFrom(f)) return `começa em ${keyLabel(fixFrom(f))} · ${brl(recAmount(f, fixFrom(f)) || 0)}`;
     if (last && cur > last) return f.months && !f.end ? `concluída em ${keyLabel(last)}` : `encerrada em ${keyLabel(last)}`;
-    const parts = [brl(recAmount(f, cur) || 0), `dia ${f.day}`];
+    const parts = [brl(recAmount(f, cur) || 0), `vence dia ${f.day}`];
+    if (!f.cardId){
+      const [y,m] = cur.split("-").map(Number), due = `${cur}-${pad(Math.min(f.day || 1, daysIn(y,m)))}`;
+      parts.push(f.paid && f.paid[cur] ? "pago" : ymd(new Date()) > due ? "atrasado" : "pendente");
+    }
     if (f.months) parts.push(`${fixNumAt(f, cur)}/${f.months}`);
     return parts.join(" · ");
   }
@@ -3416,13 +3446,63 @@
     return [
       pageHead("Despesas fixas", "menu"),
       h("div", {class:"hint", style:"margin:0 4px 12px", text: act.length
-        ? `Saem sozinhas todo mês, no dia escolhido. Total deste mês: ${brl(total)}.`
-        : "Saem sozinhas todo mês, no dia escolhido. Crie pelo + marcando “Repetir todo mês”, ou aqui."}),
+        ? `Aparecem todo mês com o vencimento; toque nelas nos lançamentos para marcar como pagas. Total deste mês: ${brl(total)}.`
+        : "Aparecem todo mês com o vencimento; toque nelas nos lançamentos para marcar como pagas. Crie pelo + marcando “Repetir todo mês”, ou aqui."}),
       h("div", {class:"set-group"},
         [...act, ...rest].map(f => setRow(catIcon("out", f.cat), f.desc, fixStatus(f), () => go("fix:" + f.id))),
         addRow("Adicionar despesa fixa", () => go("fix:new")))
     ];
   }
+  function pageFixMonth(id, k){
+    const f = profile.fixed.find(x => x.id === id);
+    if (!f || !k) return pageFix();
+    const [y,m] = k.split("-").map(Number);
+    const due = `${k}-${pad(Math.min(f.day || 1, daysIn(y,m)))}`;
+    const pay = f.paid && f.paid[k];
+    const planned = recAmount(f, k) || 0;
+    const today = ymd(new Date());
+    const state = pay ? "paid" : today > due ? "late" : "pending";
+    const amtIn = h("input", {class:"num", inputmode:"decimal", value: centsInput(pay && pay.cents > 0 ? pay.cents : planned)});
+    const dateIn = h("input", {type:"date", value: pay ? pay.date : (today < due && today.startsWith(k) ? today : (today.startsWith(k) || today > due ? today : due))});
+    const err = errBox();
+    const setPaid = async v => {
+      const paid = {...(f.paid || {})};
+      if (v) paid[k] = v; else delete paid[k];
+      const fixed = profile.fixed.map(x => x.id === id ? {...x, paid} : x);
+      return saveProfile({...profile, fixed});
+    };
+    const markPaid = async () => {
+      const cents = parseCents(amtIn.value), date = dateIn.value;
+      if (!(cents > 0)) return err.textContent = "Informe o valor pago.";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return err.textContent = "Escolha a data do pagamento.";
+      if (await setPaid({date, cents})){ toast(pay ? "Pagamento atualizado" : "Marcada como paga"); closeCfg(); }
+    };
+    const unmark = async () => { if (await setPaid(null)){ toast("Pagamento desmarcado"); closeCfg(); } };
+    const st = FIX_STATE[state];
+    const n = f.months ? ` · parcela ${fixNumAt(f, k)}/${f.months}` : "";
+    return [
+      h("button", {type:"button", class:"back-btn", text:"‹ Voltar", onclick: closeCfg}),
+      h("h3", {text: f.desc}),
+      h("div", {class:"fixm-head"},
+        h("div", {},
+          h("div", {class:"fixm-val num", text: brl(pay && pay.cents > 0 ? pay.cents : planned)}),
+          h("div", {class:"hint", style:"margin:4px 0 0", text: `${keyLabel(k, {month:"long", year:"numeric"})} · vence ${ddmm(due)}${n}`})),
+        h("span", {class:"status " + (st.cls || ""), text: st.t})),
+      pay && h("div", {class:"hint", text: `Pago em ${ddmm(pay.date)}. Já saiu do saldo da conta.`}),
+      !pay && h("div", {class:"hint", text: state === "late"
+        ? "Passou do vencimento. Enquanto não marcar como paga, ela conta só como previsão."
+        : "Enquanto não marcar como paga, ela conta só como previsão no saldo."}),
+      h("div", {class:"row2"}, h("div", {}, field("Valor pago", amtIn)), h("div", {}, field("Data do pagamento", dateIn))),
+      h("div", {class:"hint", text: planned && !pay ? `Valor previsto: ${brl(planned)}. Ajuste se a conta deste mês veio diferente.` : ""}),
+      err,
+      h("div", {class:"actions"},
+        pay && confirmBtn("Desmarcar", "Confirmar?", unmark),
+        h("button", {type:"button", class:"btn primary", text: pay ? "Salvar" : "Marcar como pago", onclick: markPaid})),
+      h("div", {style:"text-align:center;margin-top:10px"},
+        h("button", {type:"button", class:"link-btn", style:"color:var(--muted)", text:"Editar despesa fixa", onclick: () => go("fix:" + id)}))
+    ];
+  }
+
   function pageFixEdit(id){
     const isNew = id === "new";
     const cur = monthKey(new Date());
@@ -3515,7 +3595,7 @@
     return [
       pageHead(isNew ? "Nova despesa fixa" : f.desc, "fix", "Despesas fixas"),
       field("Nome", descIn),
-      h("div", {class:"row2"}, h("div", {}, field("Valor mensal", amtIn)), h("div", {}, field("Dia do pagamento", dayIn))),
+      h("div", {class:"row2"}, h("div", {}, field("Valor mensal", amtIn)), h("div", {}, field("Dia do vencimento", dayIn))),
       h("div", {class:"row2"}, h("div", {}, field("Categoria", catSel)), h("div", {}, field("Conta", accSel))),
       h("label", {text:"Duração"}), termSeg, monthsBox,
       h("label", {class:"switch-row"}, h("span", {text:`Dividir com ${nameL()}`}), splitIn),
