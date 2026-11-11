@@ -2549,7 +2549,8 @@
 
     const showSplit = partner || fType === "out" || fType === "bill";
     $("splitWrap").hidden = !showSplit;
-    $("splitRow").hidden = partner;
+    if (fromDivision && !partner && (fType === "out" || fType === "bill")) $("fSplit").checked = true;   // na aba Divisão é sempre dividido
+    $("splitRow").hidden = partner || fromDivision;
     $("payerWrap").hidden = !(partner || ((fType === "out" || fType === "bill") && $("fSplit").checked && !recurringCard()));
     $("splitLbl").textContent = `Dividir com ${nameL()}`;
     const on = partner || $("fSplit").checked;
