@@ -2829,7 +2829,7 @@
   }
 
   // reconhecimento de voz: Claude (artifact) > navegador > microfone do teclado
-  let claudeDict = null, rec = null, listening = false, voiceGoWhenDone = false;
+  let claudeDict = null, listening = false, voiceGoWhenDone = false;
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   try {
     if (window.claude && typeof window.claude.use === "function") window.claude.use("dictation").then(d => {
@@ -2856,37 +2856,111 @@
       return;
     }
     if (!SR){ keyboardMode("Toque no campo abaixo e use o microfone do teclado."); $("vText").focus(); return; }
-    try {
-      rec = new SR(); rec.lang = "pt-BR"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
-      let failed = false;
-      rec.onresult = e => { let fin = "", tmp = ""; for (const res of e.results) (res.isFinal ? (fin += res[0].transcript) : (tmp += res[0].transcript)); $("vText").value = (fin || tmp).trim(); };
-      rec.onerror = e => {
-        failed = true;
-        if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture")
-          keyboardMode("O microfone não está liberado aqui. Toque no campo abaixo e use o microfone do teclado.");
-        else if (e.error === "no-speech") setListening(false, "Não ouvi nada. Toque no microfone e tente de novo.");
-        else if (e.error !== "aborted") setListening(false, "Não consegui ouvir. Tente de novo ou digite.");
-      };
-      rec.onend = () => { const was = listening; setListening(false, failed ? null : "Toque no microfone e fale"); if (was && !failed && $("vText").value.trim()) voiceGo(); };
-      $("vText").value = "";
-      rec.start();
-      setListening(true, "Ouvindo…");
-    } catch { keyboardMode("Toque no campo abaixo e use o microfone do teclado."); $("vText").focus(); }
+    srStart();
   }
+
+  // Reconhecimento do navegador (Safari/Chrome). No iPhone, uma 2ª sessão às vezes trava sem dar sinal nenhum.
+  // Por isso: cada sessão é encerrada de propósito (stop ao ouvir a frase, abort ao fechar), um vigia percebe
+  // quando o microfone não responde, e depois de um travamento a próxima tentativa usa uma instância nova.
+  let srInst = null, srFresh = false, srTimer = null, srSession = 0, srHangs = 0;
+  // aprende neste aparelho se o microfone funciona melhor reaproveitando a instância ou criando uma nova a cada vez
+  let srAlwaysFresh = (() => { try { return localStorage.getItem("mf-sr-fresh") === "1"; } catch { return false; } })();
+  const learnSr = v => { srAlwaysFresh = v; try { localStorage.setItem("mf-sr-fresh", v ? "1" : "0"); } catch {} };
+  function srKill(){
+    clearTimeout(srTimer);
+    if (!srInst) return;
+    try { srInst.onstart = srInst.onaudiostart = srInst.onresult = srInst.onerror = srInst.onend = null; srInst.abort(); } catch {}
+  }
+  function srStart(){
+    const id = ++srSession;
+    srKill();
+    if (!srInst || srFresh || srAlwaysFresh){ srInst = null; srFresh = false; }
+    const reused = !!srInst;
+    let failed = false, alive = false;
+    const done = go => {
+      if (id !== srSession) return;
+      clearTimeout(srTimer);
+      const was = listening;
+      setListening(false, failed ? null : "Toque no microfone e fale");
+      if (go && was && !failed && $("vText").value.trim()){ srSession++; srHangs = 0; voiceGo(); }
+    };
+    const hung = () => {
+      if (id !== srSession) return;
+      failed = true; srFresh = true; srHangs++;
+      learnSr(reused);                       // travou reaproveitando: daqui em diante usa instância nova (e vice-versa)
+      srKill(); srInst = null; clearTimeout(srTimer);
+      setListening(false, srHangs > 1
+        ? "O iPhone não está liberando o microfone de novo. Toque no campo abaixo e use o microfone do teclado."
+        : "O microfone não respondeu. Toque nele de novo.");
+      if (srHangs > 1) $("vText").focus();
+    };
+    const onAlive = () => { alive = true; };
+    const onResult = e => {
+      alive = true;
+      let fin = "", tmp = "";
+      for (const res of e.results) (res.isFinal ? (fin += res[0].transcript) : (tmp += res[0].transcript));
+      $("vText").value = (fin || tmp).trim();
+      if (fin){
+        // frase completa: encerra já, para o iPhone soltar o microfone; se o fim não vier, segue assim mesmo
+        try { srInst && srInst.stop(); } catch {}
+        clearTimeout(srTimer);
+        srTimer = setTimeout(() => { if (id === srSession && listening){ srKill(); done(true); } }, 1200);
+      }
+    };
+    const onError = e => {
+      if (id !== srSession) return;
+      failed = true;
+      if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture")
+        keyboardMode("O microfone não está liberado aqui. Toque no campo abaixo e use o microfone do teclado.");
+      else if (e.error === "no-speech") setListening(false, "Não ouvi nada. Toque no microfone e tente de novo.");
+      else if (e.error !== "aborted"){ srFresh = true; setListening(false, "Não consegui ouvir. Toque no microfone de novo ou digite."); }
+      done(false);
+    };
+    const onEnd = () => done(true);
+    const wire = r => { r.lang = "pt-BR"; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+      r.onstart = r.onaudiostart = onAlive; r.onresult = onResult; r.onerror = onError; r.onend = onEnd; return r; };
+    try { srInst = wire(srInst || new SR()); srInst.start(); }
+    catch {                                   // ainda presa da sessão anterior: tenta com uma instância nova
+      try { srKill(); srInst = wire(new SR()); srInst.start(); }
+      catch { srInst = null; keyboardMode("Toque no campo abaixo e use o microfone do teclado."); $("vText").focus(); return; }
+    }
+    setListening(true, "Ouvindo…");
+    // vigia: sem sinal do microfone em 4 s = travou; sessão longa demais (12 s) = encerra
+    srTimer = setTimeout(() => {
+      if (id !== srSession || !listening) return;
+      if (!alive) return hung();
+      srTimer = setTimeout(() => {
+        if (id !== srSession || !listening) return;
+        if ($("vText").value.trim()){ srKill(); done(true); } else hung();
+      }, 8000);
+    }, 4000);
+  }
+  function srStop(){ if (srInst && listening){ try { srInst.stop(); } catch {} } }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && listening && !claudeDict){ srSession++; srKill(); setListening(false, "Toque no microfone e fale"); }
+  });
+
   function stopListening(){
     if (claudeDict && claudeDict.active()) return claudeDict.stop().catch(() => {});
-    if (rec){ try { rec.stop(); } catch {} }
+    srStop();
   }
   function openVoice(){
     $("vText").value = "";
     $("bdVoice").classList.add("open");
     startListening();
   }
-  function closeVoice(){ voiceGoWhenDone = false; if (listening) { try { rec && rec.abort(); } catch {} if (claudeDict && claudeDict.active()) claudeDict.stop().catch(() => {}); } setListening(false, "Toque no microfone e fale"); $("bdVoice").classList.remove("open"); }
+  function closeVoice(){
+    voiceGoWhenDone = false;
+    if (claudeDict && claudeDict.active()) claudeDict.stop().catch(() => {});
+    srSession++; srKill();                         // solta o microfone ao fechar
+    setListening(false, "Toque no microfone e fale");
+    $("bdVoice").classList.remove("open");
+  }
   function voiceGo(){
     const text = $("vText").value.trim();
     if (!text){ $("vStatus").textContent = "Fale ou digite o lançamento primeiro."; return; }
-    if (listening){ voiceGoWhenDone = true; stopListening(); if (!claudeDict) { setListening(false); } else return; }
+    if (listening && claudeDict){ voiceGoWhenDone = true; stopListening(); return; }
+    srSession++; srKill(); setListening(false);    // solta o microfone antes de abrir o formulário
     $("bdVoice").classList.remove("open");
     const r = parseSpoken(text);
     openForm.quiet = true; openForm(null, "me"); openForm.quiet = false;
