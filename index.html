@@ -1560,22 +1560,27 @@
   }
 
   // ---------- Regras do cartão ----------
-  // Mês (YYYY-MM) do VENCIMENTO da fatura em que cai uma compra feita em `dateStr`.
+  // As faturas são mostradas e contadas no MÊS DE REFERÊNCIA = o mês anterior ao do vencimento
+  // (ex.: a fatura que vence em 05/12 é a "fatura de novembro" e entra no saldo de novembro, mesmo paga em dezembro).
+  const dueKeyOf = refKey => shiftKey(refKey, 1);
+  // Mês de referência da fatura em que cai uma compra feita em `dateStr`.
   function invoiceKeyFor(dateStr, card){
     const {closeDay, dueDay} = card;
     const [y,m,d] = dateStr.split("-").map(Number);
     let closeKey = `${y}-${pad(m)}`;
     if (d >= Math.min(closeDay, daysIn(y,m))) closeKey = shiftKey(closeKey, 1);
-    return dueDay > closeDay ? closeKey : shiftKey(closeKey, 1);
+    const dueKey = dueDay > closeDay ? closeKey : shiftKey(closeKey, 1);
+    return shiftKey(dueKey, -1);
   }
-  function invoiceDates(key, card){
+  function invoiceDates(refKey, card){
     const {closeDay, dueDay} = card;
+    const key = dueKeyOf(refKey);
     const closeKey = dueDay > closeDay ? key : shiftKey(key, -1);
     const [cy,cm] = closeKey.split("-").map(Number), [vy,vm] = key.split("-").map(Number);
     return { close: new Date(cy, cm-1, Math.min(closeDay, daysIn(cy,cm))),
              due:   new Date(vy, vm-1, Math.min(dueDay, daysIn(vy,vm))) };
   }
-  // Parcelas de todos os seus cartões, no mês da fatura: {tx, card, n, of, cents, key}
+  // Parcelas de todos os seus cartões, no mês de referência da fatura: {tx, card, n, of, cents, key}
   function cardItems(){
     const out = [];
     for (const t of txs){
@@ -1586,8 +1591,8 @@
     }
     return out;
   }
-  const paidKey = (card, mk) => `${card.id}:${mk}`;
-  const isPaid = (card, mk) => !!profile.paid[paidKey(card, mk)] || (card.id === "c1" && !!profile.paid[mk]);
+  const paidKey = (card, refKey) => `${card.id}:${dueKeyOf(refKey)}`;
+  const isPaid = (card, refKey) => !!profile.paid[paidKey(card, refKey)] || (card.id === "c1" && !!profile.paid[dueKeyOf(refKey)]);
 
   // ---------- Receitas fixas (entram sozinhas todo mês) ----------
   function recAmount(r, mk){
@@ -2029,7 +2034,7 @@
       if (d >= now && (!pay || d < pay.date)) pay = {date:d, r};
     }
     const items = cardItems(), bills = [];
-    for (const k of [nowK, shiftKey(nowK, 1)]) for (const card of profile.cards){
+    for (const k of [shiftKey(nowK, -1), nowK, shiftKey(nowK, 1)]) for (const card of profile.cards){
       const tot = items.filter(i => i.key === k && i.card.id === card.id).reduce((s,i) => s + i.cents, 0);
       if (tot <= 0 || isPaid(card, k)) continue;
       const {due} = invoiceDates(k, card);
@@ -2160,9 +2165,10 @@
     const groups = new Map();
     for (const i of items) if (i.key === mk){ const g = groups.get(i.card.id) || {card:i.card, tot:0}; g.tot += i.cents; groups.set(i.card.id, g); }
     for (const {card, tot} of groups.values()){
-      const d = invoiceDates(mk, card).due.getDate();
+      const {close, due} = invoiceDates(mk, card);
+      const d = close.getFullYear() === y && close.getMonth() + 1 === m ? close.getDate() : dim;
       days[d].net -= tot;
-      days[d].ev.push({kind:"bill", label:`Fatura ${card.name}`, v:-tot});
+      days[d].ev.push({kind:"bill", label:`Fatura ${card.name} (vence ${pad(due.getDate())}/${pad(due.getMonth() + 1)})`, v:-tot});
     }
     return {dim, days};
   }
@@ -2355,7 +2361,7 @@
       h("div", {class:"si-actions"},
         f.tot ? h("button", {type:"button", class:"ghost-btn", text: paid ? "Desmarcar paga" : "Marcar paga", onclick: () => {
           const p = {...profile.paid};
-          if (paid){ delete p[paidKey(card, mk)]; if (card.id === "c1") delete p[mk]; } else p[paidKey(card, mk)] = true;
+          if (paid){ delete p[paidKey(card, mk)]; if (card.id === "c1") delete p[dueKeyOf(mk)]; } else p[paidKey(card, mk)] = true;
           saveProfile({...profile, paid:p});
         }}) : null,
         f.inv.length ? h("button", {type:"button", class:"ghost-btn", text: invOpen.has(card.id) ? "Ocultar itens" : `Ver ${plural(f.inv.length, "item", "itens")}`,
