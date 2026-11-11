@@ -1670,13 +1670,17 @@
   const monthTxs = mk => [...txs.filter(t => !t.ext && !isCard(t) && !isPartner(t) && (t.date||"").startsWith(mk)), ...recurringTxs(mk)];
 
   // ---------- Regras da divisão ----------
-  // Cada parcela conta no MÊS DA COMPRA (+1 mês por parcela), para os dois lados.
+  // Cada parcela conta no mês em que é cobrada (+1 mês por parcela), para os dois lados:
+  // no seu cartão = mês de referência da fatura em que a compra cai (compra depois do fechamento vai para o mês seguinte);
+  // fora do cartão = mês da compra. Linhas vindas da outra conta trazem esse mês pronto em `divKey`.
   // share = quanto a outra pessoa deve nessa parcela.
+  const divStart = t => t.ext ? (t.divKey || t.date.slice(0,7))
+                      : isCard(t) ? invoiceKeyFor(t.date, cardOf(t)) : t.date.slice(0,7);
   function splitItems(){
     const out = [];
     for (const t of txs){
       if (!isPartner(t) && !isSplit(t)) continue;
-      const pct = pctOf(t), first = t.date.slice(0,7);
+      const pct = pctOf(t), first = divStart(t);
       splitCents(t.cents, instOf(t)).forEach((c, i, arr) =>
         out.push({tx:t, who: isPartner(t) ? "her" : "me", n:i+1, of:arr.length, cents:c, share: shareOf(c, pct), key: shiftKey(first, i)}));
     }
@@ -1755,6 +1759,7 @@
   function fromPartner(id, d){
     if (!d) return null;
     const base = {id: "p:" + id, ext: true, desc: d.desc, cat: d.cat, date: d.date, createdAt: d.createdAt || 0};
+    if (/^\d{4}-\d{2}$/.test(d.divKey || "")) base.divKey = d.divKey;
     // compra que VOCÊ pagou e a outra pessoa registrou no app dela ("Quem pagou: outra pessoa" do lado dela):
     // entra na sua Divisão como paga por você; o pct dela é a parte dela, que vira "parte da outra pessoa" aqui
     if (d.payer === "partner")
@@ -2428,7 +2433,8 @@
 
     const row = (i, owedTxt) => txRow({
       emoji: catIcon("out", i.tx.cat), title: i.tx.desc || i.tx.cat, badge: i.of > 1 ? `${i.n}/${i.of}` : null,
-      tags: [{t: `${pctOf(i.tx)}%`, cls: "split"}], meta: i.tx.ext ? `${dayLabel(i.tx.date)} · registrado por ${nameL()}` : dayLabel(i.tx.date), sub: `${owedTxt} ${brl(i.share)}`,
+      tags: [{t: `${pctOf(i.tx)}%`, cls: "split"}], meta: [dayLabel(i.tx.date), isCard(i.tx) || i.tx.divKey ? `fatura de ${keyLabel(shiftKey(divStart(i.tx), i.n - 1), {month:"short"}).replace(".", "")}` : "",
+             i.tx.ext ? `registrado por ${nameL()}` : ""].filter(Boolean).join(" · "), sub: `${owedTxt} ${brl(i.share)}`,
       cents: i.cents, onClick: () => openForm(i.tx)
     });
     $("dHersCount").textContent = plural(hers.length, "item", "itens");
@@ -2737,16 +2743,19 @@
     if (card) tx.cardId = card.id;
     if (partner){ tx.payer = "partner"; tx.pct = pct; }
     else if (split){ tx.split = true; tx.pct = pct; }
+    if (split && card && !partner) tx.divKey = invoiceKeyFor(tx.date, card);
 
     const wasEditing = !!editing;
     $("fSave").disabled = true;
     try {
       await store.save(tx);
-      const key = (tab === "divisao" && (partner || split)) || partner ? tx.date.slice(0,7)
+      const key = (tab === "divisao" && (partner || split)) || partner ? divStart(tx)
                 : card ? invoiceKeyFor(tx.date, card) : tx.date.slice(0,7);
       const [y,m] = key.split("-").map(Number); view = new Date(y, m-1, 1);
       closeForm(); render();
-      toast(wasEditing ? "Lançamento atualizado" : installments > 1 ? `Compra em ${installments}x lançada` : "Lançamento salvo");
+      const late = split && card && !partner && divStart(tx) > tx.date.slice(0,7);
+      toast(late ? `Fatura já fechou: entra na divisão de ${keyLabel(divStart(tx), {month:"long"})}`
+            : wasEditing ? "Lançamento atualizado" : installments > 1 ? `Compra em ${installments}x lançada` : "Lançamento salvo");
     } catch(err){
       console.error(err);
       $("fErr").textContent = err && err.code === "quota_exceeded" ? "Limite de armazenamento atingido." : "Não foi possível salvar. Tente de novo.";
