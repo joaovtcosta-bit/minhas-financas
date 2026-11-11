@@ -191,6 +191,12 @@
   .chip{border:1px solid transparent;background:var(--raised);padding:8px 13px;border-radius:999px;cursor:pointer;font-size:15px}
   .chip.on{border-color:var(--orange);background:var(--orange-soft);color:var(--orange);font-weight:650}
   .actions{display:flex;gap:10px;margin-top:22px}
+  #bdPast{z-index:12}
+  .past-sheet h3{margin:0 0 8px}
+  .past-txt{margin:0 0 18px;color:var(--muted);line-height:1.5}
+  .past-opts{display:flex;flex-direction:column;gap:10px}
+  .past-opts .btn{flex:none;width:100%}
+  #pastBack{display:block;margin:14px auto 0}
   .btn{flex:1;border:0;padding:16px;border-radius:999px;font-weight:700;cursor:pointer;font-size:16px}
   .btn.primary{background:#f5f5f7;color:#0f0f11}
   .btn.ghost{background:var(--raised)}
@@ -1335,6 +1341,19 @@
 </div>
 
 <!-- ===== Configurações ===== -->
+<!-- ===== Parcelas passadas ===== -->
+<div class="backdrop" id="bdPast">
+  <div class="sheet past-sheet" role="dialog" aria-labelledby="pastTitle">
+    <h3 id="pastTitle">Parcelas que já passaram</h3>
+    <p class="past-txt" id="pastTxt"></p>
+    <div class="past-opts">
+      <button type="button" class="btn primary" id="pastFuture"></button>
+      <button type="button" class="btn ghost" id="pastAll"></button>
+    </div>
+    <button type="button" class="login-forgot" id="pastBack">Voltar e editar</button>
+  </div>
+</div>
+
 <div class="backdrop" id="bdCfg">
   <div class="sheet" id="cfgSheet"></div>
 </div>
@@ -1567,6 +1586,9 @@
   }
   const accountLabel = t => isCard(t) ? cardOf(t).name : (t.account || "");
 
+  // Compra parcelada cadastrada depois: com `skipBefore` (YYYY-MM), as parcelas cobradas antes desse mês são ignoradas
+  // ("só daqui pra frente"). Vale para fatura, divisão e análises.
+  const instOn = (t, key) => !t.skipBefore || key >= t.skipBefore;
   // Divide o total em parcelas; os centavos que sobram vão na 1ª parcela.
   function splitCents(total, n){
     const base = Math.floor(total / n), rest = total - base*n;
@@ -1600,8 +1622,8 @@
     for (const t of txs){
       if (!isCard(t)) continue;
       const card = cardOf(t), first = invoiceKeyFor(t.date, card);
-      splitCents(t.cents, instOf(t)).forEach((c, i, arr) =>
-        out.push({tx:t, card, n:i+1, of:arr.length, cents: t.type==="in" ? -c : c, key: shiftKey(first, i)}));
+      splitCents(t.cents, instOf(t)).forEach((c, i, arr) => { const key = shiftKey(first, i); if (instOn(t, key))
+        out.push({tx:t, card, n:i+1, of:arr.length, cents: t.type==="in" ? -c : c, key}); });
     }
     return out;
   }
@@ -1695,8 +1717,8 @@
     for (const t of txs){
       if (!isPartner(t) && !isSplit(t)) continue;
       const pct = pctOf(t), first = divStart(t);
-      splitCents(t.cents, instOf(t)).forEach((c, i, arr) =>
-        out.push({tx:t, who: isPartner(t) ? "her" : "me", n:i+1, of:arr.length, cents:c, share: shareOf(c, pct), key: shiftKey(first, i)}));
+      splitCents(t.cents, instOf(t)).forEach((c, i, arr) => { const key = shiftKey(first, i); if (instOn(t, key))
+        out.push({tx:t, who: isPartner(t) ? "her" : "me", n:i+1, of:arr.length, cents:c, share: shareOf(c, pct), key}); });
     }
     return out;
   }
@@ -2716,6 +2738,24 @@
     $("newCat").classList.remove("open"); $("newCatName").value=""; renderCats();
   });
 
+  // Pergunta o que fazer com as parcelas que já passaram. Resolve "future", "all" ou null (voltar).
+  function askPast(past, total){
+    return new Promise(res => {
+      const bd = $("bdPast");
+      $("pastTxt").textContent = `Esta compra tem ${plural(past, "parcela", "parcelas")} em meses que já passaram ` +
+        `(1 a ${past} de ${total}). Quer lançar essas parcelas nos meses passados ou só a partir deste mês?`;
+      $("pastFuture").textContent = `Só daqui pra frente (parcela ${past + 1} em diante)`;
+      $("pastAll").textContent = `Lançar também as ${past} anteriores`;
+      const done = v => { bd.classList.remove("open"); $("pastFuture").onclick = $("pastAll").onclick = $("pastBack").onclick = bd.onclick = null; res(v); };
+      $("pastFuture").onclick = () => done("future");
+      $("pastAll").onclick = () => done("all");
+      $("pastBack").onclick = () => done(null);
+      bd.onclick = e => { if (e.target === bd) done(null); };
+      bd.classList.add("open");
+      $("pastFuture").focus();
+    });
+  }
+
   $("form").addEventListener("submit", async e => {
     e.preventDefault();
     const partner = formMode === "partner";
@@ -2770,12 +2810,31 @@
     else if (split){ tx.split = true; tx.pct = pct; }
     if (split && card && !partner) tx.divKey = invoiceKeyFor(tx.date, card);
 
+    // parcelas em meses que já passaram: pergunta se lança no passado ou só daqui pra frente
+    if (tx.type === "out" && installments > 1){
+      const curK = monthKey(new Date()), first = card ? invoiceKeyFor(tx.date, card) : tx.date.slice(0,7);
+      let past = 0;
+      for (let i = 0; i < installments; i++) if (shiftKey(first, i) < curK) past++;
+      // só pergunta quando a compra ainda tem parcelas a vencer (todas no passado = registro do histórico)
+      if (past > 0 && past < installments){
+        const same = editing && editing.date === tx.date && instOf(editing) === installments && (editing.cardId||"") === (tx.cardId||"")
+                     && (editing.skipBefore || editing.pastAll);
+        if (same){ if (editing.skipBefore) tx.skipBefore = editing.skipBefore; else tx.pastAll = true; }
+        else {
+          const ans = await askPast(past, installments);
+          if (!ans) return;
+          if (ans === "future") tx.skipBefore = curK; else tx.pastAll = true;
+        }
+      }
+    }
+
     const wasEditing = !!editing;
     $("fSave").disabled = true;
     try {
       await store.save(tx);
-      const key = (tab === "divisao" && (partner || split)) || partner ? divStart(tx)
+      let key = (tab === "divisao" && (partner || split)) || partner ? divStart(tx)
                 : card ? invoiceKeyFor(tx.date, card) : tx.date.slice(0,7);
+      if (tx.skipBefore && key < tx.skipBefore) key = tx.skipBefore;
       const [y,m] = key.split("-").map(Number); view = new Date(y, m-1, 1);
       closeForm(); render();
       const late = split && card && !partner && divStart(tx) > tx.date.slice(0,7);
@@ -3149,9 +3208,9 @@
       if (isSettle(t) || !t.date) continue;
       const pk = t.date.slice(0,7), day = Number(t.date.slice(8,10));
       if (isPartner(t)){
-        splitCents(t.cents, instOf(t)).forEach((c,i,arr) => { if (shiftKey(pk,i) === mk) push(t, full ? c : shareOf(c, pctOf(t)), day, i+1, arr.length); });
+        splitCents(t.cents, instOf(t)).forEach((c,i,arr) => { if (shiftKey(pk,i) === mk && instOn(t, mk)) push(t, full ? c : shareOf(c, pctOf(t)), day, i+1, arr.length); });
       } else if (t.type === "out"){
-        splitCents(t.cents, instOf(t)).forEach((c,i,arr) => { if (shiftKey(pk,i) === mk) push(t, full ? c : c - (isSplit(t) ? shareOf(c, pctOf(t)) : 0), day, i+1, arr.length); });
+        splitCents(t.cents, instOf(t)).forEach((c,i,arr) => { if (shiftKey(pk,i) === mk && instOn(t, mk)) push(t, full ? c : c - (isSplit(t) ? shareOf(c, pctOf(t)) : 0), day, i+1, arr.length); });
       } else if (isCard(t) && pk === mk){
         push(t, -t.cents, day, 1, 1);
       }
@@ -3161,8 +3220,11 @@
   // custo real da compra inteira, na data da compra (para o mapa de calor e os estabelecimentos)
   function purchaseCost(t){
     if (isSettle(t) || t.type !== "out" || !t.date) return 0;
-    if (isPartner(t)) return shareOf(t.cents, pctOf(t));
-    return t.cents - (isSplit(t) ? shareOf(t.cents, pctOf(t)) : 0);
+    let cents = t.cents;
+    if (t.skipBefore){ const first = isCard(t) ? invoiceKeyFor(t.date, cardOf(t)) : t.date.slice(0,7);
+      cents = splitCents(t.cents, instOf(t)).reduce((s, c, i) => s + (instOn(t, shiftKey(first, i)) ? c : 0), 0); }
+    if (isPartner(t)) return shareOf(cents, pctOf(t));
+    return cents - (isSplit(t) ? shareOf(cents, pctOf(t)) : 0);
   }
   function cumulative(items, dim){
     const daily = Array(dim + 1).fill(0);
