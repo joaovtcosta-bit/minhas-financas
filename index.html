@@ -1635,7 +1635,8 @@
         const t = {id:`fx-${f.id}-${k}`, fixed:f.id, fixK:k, virtual:true, type:"out", cents, desc:f.desc, cat:f.cat,
                    date:due, due, installments:1, createdAt:0,
                    account: card ? card.name : (f.account || accts()[0]), fixN: i + 1, fixOf: f.months || null};
-        if (card) t.cardId = card.id;
+        if (f.payer === "partner"){ t.payer = "partner"; t.pct = Number.isFinite(f.pct) ? f.pct : 50; t.account = ""; }
+        else if (card) t.cardId = card.id;
         else {
           const pay = f.paid && f.paid[k];
           if (pay){
@@ -1648,7 +1649,7 @@
             if (today > due && k === today.slice(0,7)) t.date = today;   // atrasada no mês atual: ainda é previsão
           }
         }
-        if (f.split){ t.split = true; t.pct = Number.isFinite(f.pct) ? f.pct : 50; }
+        if (f.split && f.payer !== "partner"){ t.split = true; t.pct = Number.isFinite(f.pct) ? f.pct : 50; }
         out.push(t);
       }
     }
@@ -2131,7 +2132,7 @@
         list.append(h("div", {class:"day", text: new Date(y, m-1, d).toLocaleDateString("pt-BR",{weekday:"long", day:"numeric", month:"short"})}));
       }
       const tags = [{t: isSettle(t) ? "Acerto" : t.cat}];
-      if (isRec(t) || (isFix(t) && t.fixOf !== 1)) tags.push({t: isFix(t) && !t.fixState ? "Recorrente" : "Fixa", cls:"fixed"});
+      if (isRec(t) || (isFix(t) && t.fixOf !== 1)) tags.push({t: isFix(t) && t.cardId ? "Recorrente" : "Fixa", cls:"fixed"});
       if (isSplit(t)) tags.push({t:"Dividida", cls:"split"});
       list.append(txRow({
         emoji: catIcon(t.type, t.cat), title: t.desc || t.cat, tags,
@@ -2507,7 +2508,7 @@
     const cents = parseCents($("fAmount").value);
     const date = $("fDate").value;
     const card = partner ? null : selectedCard();
-    const bill = !partner && fType === "bill";
+    const bill = fType === "bill";
     $("fDateLbl").textContent = bill ? "Vencimento" : "Data";
     // Conta: repetir todo mês (só ao criar)
     $("repWrap").hidden = !bill || !!editing;
@@ -2533,7 +2534,7 @@
       ch.append(h("b", {text:`${cents > 0 ? brl(cents) + " " : ""}todo dia ${Number(date.slice(8,10))}`}),
         ` na fatura do ${card.name}, a partir da fatura de ${keyLabel(invoiceKeyFor(date, card))}, até você encerrar.`);
     }
-    const showInst = !rec && (partner || (fType === "out" && !!card));
+    const showInst = !rec && ((partner && fType === "out") || (fType === "out" && !!card));
     $("instWrap").hidden = !showInst;
     const n = showInst ? (Number(fInst.value) || 1) : 1;
     const parts = cents > 0 ? splitCents(cents, n) : null;
@@ -2549,7 +2550,7 @@
     const showSplit = partner || fType === "out" || fType === "bill";
     $("splitWrap").hidden = !showSplit;
     $("splitRow").hidden = partner;
-    $("payerWrap").hidden = !(partner || (fType === "out" && $("fSplit").checked && !recurringCard()));
+    $("payerWrap").hidden = !(partner || ((fType === "out" || fType === "bill") && $("fSplit").checked && !recurringCard()));
     $("splitLbl").textContent = `Dividir com ${nameL()}`;
     const on = partner || $("fSplit").checked;
     $("pctWrap").hidden = !(showSplit && on);
@@ -2581,12 +2582,15 @@
       h("button", {type:"button", class:"chip", onclick: () => { $("newCat").classList.add("open"); $("newCatName").focus(); }}, icon("plus"), h("span", {text:"Nova"})));
   }
   // "me" = você pagou; "partner" = a outra pessoa pagou (você deve a sua parte)
+  let fromDivision = false;
   function paintMode(){
     const partner = formMode === "partner";
-    $("formTitle").textContent = partner
-      ? (editing ? `Editar compra de ${nameL()}` : `Compra de ${nameL()}`)
-      : (editing ? "Editar lançamento" : "Novo lançamento");
-    $("fSeg").hidden = partner;
+    $("formTitle").textContent = editing ? "Editar lançamento" : fromDivision ? "Novo gasto dividido" : "Novo lançamento";
+    $("fSeg").hidden = false;
+    // a outra pessoa só paga gasto ou conta; na aba Divisão não há receita
+    const noIncome = partner || fromDivision;
+    document.querySelector('#fSeg button[data-type="in"]').hidden = noIncome;
+    $("fSeg").classList.toggle("seg3", !noIncome);           // 2 ou 3 colunas
     $("fAccWrap").hidden = partner;
     $("fRow").style.gridTemplateColumns = partner ? "1fr" : "";
     $("payerOther").textContent = name();
@@ -2597,6 +2601,7 @@
     if (tx && tx.virtual){ closeForm(); openCfg("fix:" + tx.fixed); return; }
     editing = tx || null;
     formMode = tx ? (isPartner(tx) ? "partner" : "me") : (mode === "partner" ? "partner" : "me");
+    fromDivision = tab === "divisao";
     const partner = formMode === "partner";
     paintMode();
     buildAccounts();
@@ -2616,6 +2621,7 @@
     $("fErr").textContent = ""; $("newCat").classList.remove("open"); $("newCatName").value="";
     $("fDel").hidden = !tx; $("fDel").textContent = tx && instOf(tx) > 1 ? "Excluir compra" : "Excluir"; $("fDel").dataset.confirm = "";
     setType(partner ? "out" : (tx ? tx.type : "out"));
+    if (fromDivision && fType === "in") setType("out");
     $("bd").classList.add("open");
     $("fHeard").hidden = true;
     if (!tx && !openForm.quiet) setTimeout(() => $("fAmount").focus(), 50);
@@ -2634,7 +2640,7 @@
     const p = readPct(); if (p){ const q = 100 - p; $("fPct").value = q >= 1 ? q : 50; }
     formMode = to;
     if (to === "me") $("fSplit").checked = true;
-    paintMode(); setType("out");
+    paintMode(); setType(fType === "bill" && !editing ? "bill" : "out");
   }));
   $("fCancel").addEventListener("click", closeForm);
   $("bd").addEventListener("click", e => { if (e.target === $("bd")) closeForm(); });
@@ -2670,17 +2676,17 @@
     if (!$("fDate").value) return $("fErr").textContent = "Informe a data.";
     const card = partner ? null : selectedCard();
     const account = partner ? "" : card ? card.name : $("fAcc").value;
-    const installments = (partner || (fType === "out" && card && !recurringCard())) ? Number(fInst.value) || 1 : 1;
+    const installments = ((partner && fType === "out") || (fType === "out" && card && !recurringCard())) ? Number(fInst.value) || 1 : 1;
     if (cents < installments) return $("fErr").textContent = "Valor pequeno demais para esse número de parcelas.";
     const split = !partner && (fType === "out" || fType === "bill") && $("fSplit").checked;
     const pct = readPct();
     if ((partner || split) && !pct) return $("fErr").textContent = "A porcentagem deve ser um número inteiro de 1 a 100.";
 
     // Conta (boleto/conta de consumo) ou gasto recorrente no cartão: vira item de "Contas e recorrentes"
-    if (!partner && !editing && (fType === "bill" || recurringCard())){
+    if (!editing && (fType === "bill" || (!partner && recurringCard()))){
       const date = $("fDate").value, start = date.slice(0,7);
       const f = {id: uid(), desc: $("fDesc").value.trim() || fCat, cat: fCat, day: Number(date.slice(8,10)),
-                 account: card ? card.name : $("fAcc").value, start, amounts:[{from:start, cents}], createdAt: Date.now()};
+                 account: partner ? "" : card ? card.name : $("fAcc").value, start, amounts:[{from:start, cents}], createdAt: Date.now()};
       let msg;
       if (fType === "bill"){
         if (repeating()){
@@ -2690,7 +2696,8 @@
           msg = term.open ? "Conta recorrente criada" : `Conta criada: ${term.tot - term.cur + 1} de ${term.tot} parcelas`;
         } else { f.months = 1; msg = "Conta criada"; }                    // conta avulsa: só este mês
       } else { f.cardId = card.id; msg = `Gasto recorrente criado no ${card.name}`; }
-      if (split){ f.split = true; f.pct = pct; }
+      if (partner){ f.payer = "partner"; f.pct = pct; }
+      else if (split){ f.split = true; f.pct = pct; }
       $("fSave").disabled = true;
       try {
         if (!await saveProfile({...profile, fixed:[...profile.fixed, f]})) return;
@@ -2703,7 +2710,7 @@
 
     const tx = {
       id: editing ? editing.id : uid(),
-      type: partner ? "out" : fType, cents, cat: fCat, account, installments,
+      type: partner || fType === "bill" ? "out" : fType, cents, cat: fCat, account, installments,
       desc: $("fDesc").value.trim(),
       date: $("fDate").value,
       createdAt: editing ? (editing.createdAt||Date.now()) : Date.now()
@@ -3919,7 +3926,8 @@
     if (last && cur > last) return f.months && !f.end ? `concluída em ${keyLabel(last)}` : `encerrada em ${keyLabel(last)}`;
     const card = f.cardId && profile.cards.find(c => c.id === f.cardId);
     const parts = [brl(recAmount(f, cur) || 0), card ? `dia ${f.day} na fatura do ${card.name}` : `vence dia ${f.day}`];
-    if (!f.cardId){
+    if (f.payer === "partner") parts.push(`paga por ${nameL()}`);
+    else if (!f.cardId){
       const [y,m] = cur.split("-").map(Number), due = `${cur}-${pad(Math.min(f.day || 1, daysIn(y,m)))}`;
       parts.push(f.paid && f.paid[cur] ? "pago" : ymd(new Date()) > due ? "atrasado" : "pendente");
     }
@@ -4021,9 +4029,10 @@
       monthsBox.hidden = !term;
     };
     paintTerm();
-    const splitIn = h("input", {type:"checkbox", class:"switch", checked: !!f.split});
+    const partnerPaid = f.payer === "partner";
+    const splitIn = h("input", {type:"checkbox", class:"switch", checked: !!f.split || partnerPaid});
     const pctIn = h("input", {type:"number", min:1, max:100, inputmode:"numeric", value: Number.isFinite(f.pct) ? f.pct : 50});
-    const pctBox = h("div", {}, field(`Parte de ${nameL()} (%)`, pctIn));
+    const pctBox = h("div", {}, field(partnerPaid ? "Sua parte (%)" : `Parte de ${nameL()} (%)`, pctIn));
     const paintSplit = () => { pctBox.hidden = !splitIn.checked; };
     splitIn.addEventListener("change", paintSplit); paintSplit();
     const fromIn = h("input", {type:"month", value: refK});
@@ -4061,7 +4070,8 @@
         next.start = shiftKey(baseK, -(curN - 1));
         if (next.start < firstLaunch) next.since = firstLaunch; else delete next.since;
       } else { delete next.months; if (!isNew) next.start = from < fixFrom(f) ? from : fixFrom(f); delete next.since; }
-      if (splitIn.checked){ next.split = true; next.pct = pct; } else { delete next.split; delete next.pct; }
+      if (partnerPaid){ next.pct = pct; delete next.split; }
+      else if (splitIn.checked){ next.split = true; next.pct = pct; } else { delete next.split; delete next.pct; }
       const fixed = isNew ? [...profile.fixed, next] : profile.fixed.map(x => x.id === id ? next : x);
       if (await saveProfile({...profile, fixed})){ toast(isNew ? "Criada" : "Atualizada"); go("fix"); }
     };
@@ -4085,7 +4095,8 @@
       h("div", {class:"row2"}, h("div", {}, field("Valor mensal", amtIn)), h("div", {}, field("Dia do vencimento", dayIn))),
       h("div", {class:"row2"}, h("div", {}, field("Categoria", catSel)), h("div", {}, field("Conta", accSel))),
       h("label", {text:"Duração"}), termSeg, monthsBox,
-      h("label", {class:"switch-row"}, h("span", {text:`Dividir com ${nameL()}`}), splitIn),
+      partnerPaid ? h("div", {class:"hint", text:`Paga por ${nameL()}: não sai da sua conta; você deve a sua parte na Divisão.`})
+                  : h("label", {class:"switch-row"}, h("span", {text:`Dividir com ${nameL()}`}), splitIn),
       pctBox,
       field(isNew ? "Começa em" : "Mudança de valor vale a partir de", fromIn),
       h("div", {class:"hint", text: isNew
