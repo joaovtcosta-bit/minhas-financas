@@ -1635,7 +1635,7 @@
         const t = {id:`fx-${f.id}-${k}`, fixed:f.id, fixK:k, virtual:true, type:"out", cents, desc:f.desc, cat:f.cat,
                    date:due, due, installments:1, createdAt:0,
                    account: card ? card.name : (f.account || accts()[0]), fixN: i + 1, fixOf: f.months || null};
-        if (f.payer === "partner"){ t.payer = "partner"; t.pct = Number.isFinite(f.pct) ? f.pct : 50; t.account = ""; }
+        if (f.payer === "partner"){ t.payer = "partner"; t.pct = Number.isFinite(f.pct) ? f.pct : 50; t.account = f.account || ""; }
         else if (card) t.cardId = card.id;
         else {
           const pay = f.paid && f.paid[k];
@@ -2476,14 +2476,19 @@
   for (let n = 1; n <= MAX_INST; n++) fInst.append(h("option", {value:n, text: n === 1 ? "À vista (1x)" : `${n}x`}));
 
   // Contas + um item por cartão ("card:<id>"); uma Conta (boleto) não é paga no cartão
+  const PARTNER_CARD = "Cartão de crédito";     // compra paga pela outra pessoa no cartão dela (não entra nas suas faturas)
   function buildAccounts(noCards){
-    const sel = $("fAcc"), cur = sel.value;
-    sel.replaceChildren(...accts().map(a => h("option", {value:a, text:a})),
-      ...(noCards ? [] : profile.cards.map(c => h("option", {value:"card:" + c.id, text:`💳 ${c.name}`}))));
+    const sel = $("fAcc"), cur = sel.value, partner = formMode === "partner";
+    const cards = noCards ? [] : partner ? [h("option", {value:"pcard", text:`💳 ${PARTNER_CARD}`})]
+                                         : profile.cards.map(c => h("option", {value:"card:" + c.id, text:`💳 ${c.name}`}));
+    sel.replaceChildren(...accts().map(a => h("option", {value:a, text:a})), ...cards);
     if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
-    else if (cur && !cur.startsWith("card:")) { sel.append(h("option", {value:cur, text:cur})); sel.value = cur; }
+    else if (cur && !noCards && (partner ? cur.startsWith("card:") : cur === "pcard"))         // trocou quem pagou: mantém "cartão"
+      sel.value = partner ? "pcard" : (profile.cards[0] ? "card:" + profile.cards[0].id : accts()[0]);
+    else if (cur && !cur.startsWith("card:") && cur !== "pcard") { sel.append(h("option", {value:cur, text:cur})); sel.value = cur; }
     else sel.value = accts()[0];
   }
+  const partnerCard = () => formMode === "partner" && $("fAcc").value === "pcard";
   const catType = () => fType === "in" ? "in" : "out";      // Gasto e Conta usam as categorias de gasto
   const accValueOf = t => isCard(t) ? "card:" + cardOf(t).id : (t.account || accts()[0]);
   const selectedCard = () => { const v = $("fAcc").value; return v.startsWith("card:") ? profile.cards.find(c => "card:" + c.id === v) || null : null; };
@@ -2534,7 +2539,7 @@
       ch.append(h("b", {text:`${cents > 0 ? brl(cents) + " " : ""}todo dia ${Number(date.slice(8,10))}`}),
         ` na fatura do ${card.name}, a partir da fatura de ${keyLabel(invoiceKeyFor(date, card))}, até você encerrar.`);
     }
-    const showInst = !rec && ((partner && fType === "out") || (fType === "out" && !!card));
+    const showInst = !rec && fType === "out" && (!!card || partnerCard());
     $("instWrap").hidden = !showInst;
     const n = showInst ? (Number(fInst.value) || 1) : 1;
     const parts = cents > 0 ? splitCents(cents, n) : null;
@@ -2572,7 +2577,7 @@
     fType = t;
     document.querySelectorAll("#fSeg button").forEach(b => b.classList.toggle("on", b.dataset.type===t));
     if (!catsFor(catType()).some(c => c.name === fCat)) fCat = null;
-    if (formMode !== "partner") buildAccounts(t === "bill");
+    buildAccounts(t === "bill");
     renderCats(); updateHints();
   }
   function renderCats(){
@@ -2592,8 +2597,8 @@
     const noIncome = partner || fromDivision;
     document.querySelector('#fSeg button[data-type="in"]').hidden = noIncome;
     $("fSeg").classList.toggle("seg3", !noIncome);           // 2 ou 3 colunas
-    $("fAccWrap").hidden = partner;
-    $("fRow").style.gridTemplateColumns = partner ? "1fr" : "";
+    $("fAccWrap").hidden = false;
+    $("fRow").style.gridTemplateColumns = "";
     $("payerOther").textContent = name();
     document.querySelectorAll("#payerSeg button").forEach(b => b.classList.toggle("on", b.dataset.payer === formMode));
   }
@@ -2609,7 +2614,9 @@
     $("fAmount").value = tx ? centsInput(tx.cents) : "";
     $("fDesc").value = tx ? (tx.desc||"") : "";
     $("fDate").value = tx ? tx.date : (monthKey(view)===monthKey(new Date()) ? ymd(new Date()) : ymd(view));
-    const acc = tx ? accValueOf(tx) : accts()[0];
+    const acc = !tx ? accts()[0]
+      : partner ? (tx.account === PARTNER_CARD || (!tx.account && (tx.installments || 1) > 1) ? "pcard" : (tx.account || accts()[0]))
+      : accValueOf(tx);
     if (![...$("fAcc").options].some(o => o.value === acc)) $("fAcc").append(h("option", {value:acc, text:acc}));
     $("fAcc").value = acc;
     fInst.value = String(tx ? (tx.installments||1) : 1);
@@ -2676,8 +2683,8 @@
     if (!fCat) return $("fErr").textContent = "Escolha uma categoria.";
     if (!$("fDate").value) return $("fErr").textContent = "Informe a data.";
     const card = partner ? null : selectedCard();
-    const account = partner ? "" : card ? card.name : $("fAcc").value;
-    const installments = ((partner && fType === "out") || (fType === "out" && card && !recurringCard())) ? Number(fInst.value) || 1 : 1;
+    const account = partner ? (partnerCard() ? PARTNER_CARD : $("fAcc").value) : card ? card.name : $("fAcc").value;
+    const installments = (fType === "out" && ((card && !recurringCard()) || partnerCard())) ? Number(fInst.value) || 1 : 1;
     if (cents < installments) return $("fErr").textContent = "Valor pequeno demais para esse número de parcelas.";
     const split = !partner && (fType === "out" || fType === "bill") && $("fSplit").checked;
     const pct = readPct();
@@ -2687,7 +2694,7 @@
     if (!editing && (fType === "bill" || (!partner && recurringCard()))){
       const date = $("fDate").value, start = date.slice(0,7);
       const f = {id: uid(), desc: $("fDesc").value.trim() || fCat, cat: fCat, day: Number(date.slice(8,10)),
-                 account: partner ? "" : card ? card.name : $("fAcc").value, start, amounts:[{from:start, cents}], createdAt: Date.now()};
+                 account: card ? card.name : $("fAcc").value, start, amounts:[{from:start, cents}], createdAt: Date.now()};
       let msg;
       if (fType === "bill"){
         if (repeating()){
