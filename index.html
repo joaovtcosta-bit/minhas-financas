@@ -893,6 +893,27 @@
   .pw-wrap{position:relative}
   .logout-row{margin-top:12px}
   .login-keep{margin:12px 0 0}
+
+  /* ditado */
+  .mic-btn{background:linear-gradient(180deg,#2c2c2f,#1f1f22)}
+  .mic-btn svg{color:var(--accent)}
+  .voice-sheet{text-align:center}
+  .voice-sheet h3{text-align:left}
+  .voice-sheet label,.voice-sheet .hint{text-align:left}
+  .voice-mic{width:88px;height:88px;border-radius:50%;border:0;margin:6px auto 10px;display:grid;place-items:center;cursor:pointer;
+    color:var(--accent-ink);background:linear-gradient(180deg,var(--accent-2),var(--accent));position:relative;
+    box-shadow:0 10px 30px color-mix(in srgb,var(--accent) 35%,transparent)}
+  .voice-mic svg{width:36px;height:36px}
+  .voice-mic.listening::after{content:"";position:absolute;inset:-10px;border-radius:50%;border:2px solid var(--accent);
+    animation:voicePulse 1.3s ease-out infinite}
+  @keyframes voicePulse{from{transform:scale(.9);opacity:.9}to{transform:scale(1.25);opacity:0}}
+  @media (prefers-reduced-motion:reduce){ .voice-mic.listening::after{animation:none;opacity:.6} }
+  .voice-status{font-size:14px;color:var(--muted);min-height:20px;margin-bottom:6px}
+  .voice-text{width:100%;padding:14px 16px;border-radius:16px;background:var(--raised);border:1px solid transparent;color:var(--text);
+    font:inherit;font-size:16px;resize:none;outline:none}
+  .voice-text:focus{border-color:var(--accent)}
+  .voice-heard{font-size:13px;color:var(--muted);background:var(--raised);border-radius:14px;padding:9px 12px;margin:-6px 0 12px}
+  .voice-heard b{color:var(--text);font-weight:600}
   #repWrap .switch-row{margin-top:14px}
   .rep-seg{margin:10px 0 0}
   #recWrap .switch-row{margin-top:14px}
@@ -939,6 +960,7 @@
         <span id="monthLbl">NOV</span>
         <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5l4 4 4-4"/></svg>
       </button>
+      <button type="button" class="round-btn mic-btn" id="micBtn" aria-label="Ditar lançamento"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button>
       <button type="button" class="round-btn" id="addBtn" aria-label="Novo lançamento">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 4v16M4 12h16"/></svg>
       </button>
@@ -1194,10 +1216,27 @@
   </div>
 </div>
 
+<!-- ===== Ditado ===== -->
+<div class="backdrop" id="bdVoice">
+  <div class="sheet voice-sheet">
+    <h3>Ditar lançamento</h3>
+    <button type="button" class="voice-mic" id="vMic" aria-label="Falar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button>
+    <div class="voice-status" id="vStatus" aria-live="polite">Toque no microfone e fale</div>
+    <label for="vText">O que você disse</label>
+    <textarea id="vText" class="voice-text" rows="2" maxlength="200" placeholder="Ex.: gastei 5 reais no crédito na padaria"></textarea>
+    <div class="hint">Diga o valor, onde foi e como pagou. Ex.: “32,90 no Pix no mercado”, “almoço 45 reais no débito, dividido”, “recebi 500 de freela”.</div>
+    <div class="actions">
+      <button type="button" class="btn ghost" id="vCancel">Cancelar</button>
+      <button type="button" class="btn primary" id="vGo">Continuar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== Formulário de lançamento ===== -->
 <div class="backdrop" id="bd">
   <form class="sheet" id="form" autocomplete="off">
     <h3 id="formTitle">Novo lançamento</h3>
+    <div class="voice-heard" id="fHeard" hidden></div>
     <div class="f-left">
     <div class="seg seg3" id="fSeg">
       <button type="button" data-type="out" class="out-t">Gasto</button>
@@ -2553,7 +2592,8 @@
     $("fDel").hidden = !tx; $("fDel").textContent = tx && instOf(tx) > 1 ? "Excluir compra" : "Excluir"; $("fDel").dataset.confirm = "";
     setType(partner ? "out" : (tx ? tx.type : "out"));
     $("bd").classList.add("open");
-    if (!tx) setTimeout(() => $("fAmount").focus(), 50);
+    $("fHeard").hidden = true;
+    if (!tx && !openForm.quiet) setTimeout(() => $("fAmount").focus(), 50);
   }
   function closeForm(){ $("bd").classList.remove("open"); editing = null; }
 
@@ -2663,6 +2703,213 @@
     try { await store.remove(editing.id); closeForm(); render(); toast("Lançamento excluído"); }
     catch { $("fErr").textContent = "Não foi possível excluir."; }
   });
+
+  // ---------- Ditado: fala -> lançamento preenchido ----------
+  // O reconhecimento de voz é do navegador (ou do Claude, dentro do artifact); a frase é interpretada aqui no app.
+  const fold = t => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const NUM_WORDS = {um:1,uma:1,dois:2,duas:2,tres:3,quatro:4,cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,onze:11,doze:12,treze:13,
+    quatorze:14,catorze:14,quinze:15,dezesseis:16,dezessete:17,dezoito:18,dezenove:19,vinte:20,trinta:30,quarenta:40,cinquenta:50,
+    sessenta:60,setenta:70,oitenta:80,noventa:90,cem:100,cento:100,duzentos:200,duzentas:200,trezentos:300,quatrocentos:400,
+    quinhentos:500,seiscentos:600,setecentos:700,oitocentos:800,novecentos:900};
+  const wordsToNum = str => {
+    let total = 0, cur = 0, any = false;
+    for (const w of str.trim().split(/\s+/)){
+      if (w === "e") continue;
+      if (w === "mil"){ total += (cur || 1) * 1000; cur = 0; any = true; continue; }
+      if (!(w in NUM_WORDS)) return null;
+      cur += NUM_WORDS[w]; any = true;
+    }
+    return any ? total + cur : null;
+  };
+  const CAT_HINTS = {
+    out: [
+      ["Compras", /\b(mercado livre|shopee|amazon|shopping|loja|roupas?|tenis|sapatos?|presentes?|eletronicos?|magalu)\b/],
+      ["Mercado", /\b(supermercado|mercadinho|mercado|feira|atacadao|assai|hortifruti|sacolao|acougue|carrefour)\b/],
+      ["Alimentação", /\b(padaria|restaurante|lanchonete|lanches?|almoco|jantar|janta|cafe|cafeteria|ifood|pizza|pizzaria|hamburguer|burger|sorvete|acai|comida|marmita|bar|cerveja|delivery|sushi|pastel|salgados?|doceria)\b/],
+      ["Transporte", /\b(uber|99|taxi|gasolina|combustivel|posto|onibus|metro|estacionamento|pedagio|passagem|trem|etanol|alcool|lava jato|oficina)\b/],
+      ["Moradia", /\b(aluguel|condominio|iptu|reforma)\b/],
+      ["Contas", /\b(luz|energia|agua|internet|telefone|celular|gas|boleto|fatura)\b/],
+      ["Saúde", /\b(farmacia|drogaria|remedios?|medico|consulta|dentista|exames?|hospital|academia|plano de saude)\b/],
+      ["Lazer", /\b(cinema|shows?|netflix|spotify|viagem|ingressos?|parque|jogos?|streaming|hotel|festa)\b/],
+      ["Educação", /\b(cursos?|livros?|escola|faculdade|mensalidade|apostila)\b/]
+    ],
+    in: [
+      ["Salário", /\b(salario|pagamento do mes)\b/],
+      ["Freelance", /\b(freela|freelance|job|bico|servico)\b/],
+      ["Investimentos", /\b(rendimentos?|dividendos?|juros|investimentos?|cdb|tesouro)\b/],
+      ["Presente", /\b(presente|pix de aniversario)\b/]
+    ]
+  };
+  const ACC_STOP = new Set(["conta","de","da","do","e","carteira","digital","cartao","credito","banco"]);
+  function parseSpoken(raw){
+    const orig = " " + raw.trim().normalize("NFC") + " ";
+    let n = fold(orig);
+    const blank = re => { const found = []; n = n.replace(re, (...m) => { found.push(m); return " ".repeat(m[0].length); }); return found; };
+    const has = re => re.test(n);
+    const r = {type:"out", inst:1};
+
+    if (has(/\b(recebi|ganhei|entrou|caiu|me pagaram|me pagou|recebimento|receita)\b/)) r.type = "in";
+
+    // data
+    const today = new Date();
+    if (blank(/\banteontem\b/g).length) r.date = ymd(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 2));
+    else if (blank(/\bontem\b/g).length) r.date = ymd(new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1));
+    const dia = blank(/\bdia\s+(\d{1,2})\b/g)[0];
+    if (dia){
+      const d = Number(dia[1]);
+      if (d >= 1 && d <= 31){
+        const back = d > today.getDate() ? 1 : 0, y = today.getFullYear(), m = today.getMonth() - back;
+        r.date = ymd(new Date(y, m, Math.min(d, daysIn(new Date(y, m, 1).getFullYear(), new Date(y, m, 1).getMonth() + 1))));
+      }
+    }
+
+    // parcelas
+    const inst = blank(/\b(?:parcelad[oa]\s+)?(?:em\s+)?(\d{1,2})\s*(?:x|vezes)\b/g)[0];
+    if (inst){ const k = Number(inst[1]); if (k >= 2 && k <= MAX_INST) r.inst = k; }
+
+    // valor
+    const toCents = (int, dec) => Math.round(Number(String(int).replace(/\./g, "")) * 100) + (dec ? Number((dec + "0").slice(0, 2)) : 0);
+    let m;
+    if ((m = blank(/(\d{1,3}(?:\.\d{3})+|\d+)\s*(?:reais|real)\s+e\s+(\d{1,2})(?:\s*centavos?)?\b/)[0])) r.cents = toCents(m[1], m[2].padStart(2, "0"));
+    else if ((m = blank(/r\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:[,.](\d{1,2}))?/)[0])) r.cents = toCents(m[1], m[2]);
+    else if ((m = blank(/\b(\d{1,3}(?:\.\d{3})+|\d+)(?:[,.](\d{1,2}))?\s*(?:reais|real|contos?|pila|r\$)/)[0])) r.cents = toCents(m[1], m[2]);
+    else if ((m = blank(/\b((?:(?:um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|duzentos|duzentas|trezentos|quatrocentos|quinhentos|seiscentos|setecentos|oitocentos|novecentos|mil|e)\s+)+)(?:reais|real|contos?)\b/)[0])){
+      const v = wordsToNum(m[1]); if (v) r.cents = v * 100;
+    }
+    else if ((m = blank(/\b(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?\b/)[0])) r.cents = toCents(m[1], m[2]);
+    blank(/\b(?:reais|real|centavos?)\b/g);
+
+    // forma de pagamento
+    const wordsOf = name => fold(name).split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !ACC_STOP.has(w));
+    const mentions = name => { const f = fold(name).trim(); if (f && n.includes(" " + f + " ")) return true; return wordsOf(name).some(w => new RegExp(`\\b${w}\\b`).test(n)); };
+    const card = profile.cards.find(c => mentions(c.name));
+    const acct = accts().find(a => mentions(a));
+    const findAcc = re => accts().find(a => re.test(fold(a)));
+    const credit = has(/\b(credito|cartao)\b/), debit = has(/\bdebito\b/), pix = has(/\bpix\b/), cash = has(/\b(dinheiro|especie|cash)\b/);
+    if (r.type === "out" && profile.cards.length && (credit || (card && !debit && !pix))) r.acc = "card:" + (card || profile.cards[0]).id;
+    else if (acct) r.acc = acct;
+    else if (pix) r.acc = findAcc(/pix/);
+    else if (cash) r.acc = findAcc(/dinheiro|especie/);
+    else if (debit) r.acc = findAcc(/corrente|debito/) || accts()[0];
+    blank(/\b(?:no|na|pelo|pela|com o|com a|com|via|em|usando o|usando a|usando)?\s*(?:cartao de credito|cartao de debito|cartao|credito|debito|pix|dinheiro|especie|cash)\b/g);
+    for (const nm of [...profile.cards.map(c => c.name), ...accts()]){
+      for (const w of [fold(nm).trim(), ...wordsOf(nm)]) if (w) blank(new RegExp(`\\b(?:no|na|pelo|pela|com o|com a|com|via|do|da)?\\s*${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"));
+    }
+
+    // dividir
+    if (blank(/\b(?:dividid[oa]|dividir|divide|divisao|meio a meio|rachad[oa]|rachar)\b/g).length) r.split = true;
+    if (profile.partnerName) blank(new RegExp(`\\b(?:com|com a|com o|e a|e o)\\s+${fold(profile.partnerName).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "g"));
+
+    // palavras de comando
+    blank(/\b(?:acabei de|acabo de|eu|agora|hoje|gastei|gasto|gastar|paguei|pagar|pago|comprei|comprar|compra de|compra|fiz uma compra|foi|deu|um gasto de|gasto de|recebi|ganhei|entrou|caiu|me pagaram|me pagou|lanca|lancar|coloca|adiciona|registra|anota|por favor|valor de|no valor de)\b/g);
+
+    // descrição: o que vem depois de "na/no/em...", senão o que sobrou
+    const clean = Array.from(orig, (ch, i) => n[i] === " " ? " " : ch).join("");
+    let span = clean;
+    const lastPrep = [...fold(clean).matchAll(/\b(?:na|no|numa|num|em|pra|pro|para o|para a|pelo|pela)\s+(?=\S)/g)].pop();
+    if (lastPrep) span = clean.slice(lastPrep.index + lastPrep[0].length);
+    let desc = span.split(/[,;.!?]/)[0].replace(/\s+/g, " ").trim();
+    if (!desc) desc = clean.replace(/[,;.!?]/g, " ").replace(/\s+/g, " ").trim();
+    desc = desc.replace(/^(?:o|a|os|as|um|uma|de|do|da|no|na|em|com|e)\s+/i, "").replace(/\s+(?:de|do|da|e|no|na|com)$/i, "").trim();
+    if (desc) r.desc = (desc.charAt(0).toUpperCase() + desc.slice(1)).slice(0, 80);
+
+    // categoria: mesmo nome já usado antes > categoria citada > palavra-chave
+    const cats = catsFor(r.type), fd = fold(r.desc || "");
+    const prev = fd && [...ownTxs].filter(t => !t.ext && t.type === r.type && fold(t.desc || "") === fd).sort((a,b) => (b.createdAt||0) - (a.createdAt||0))[0];
+    const words = fold(raw);
+    if (prev && cats.some(c => c.name === prev.cat)) r.cat = prev.cat;
+    else {
+      const named = cats.find(c => c.name !== "Outros" && new RegExp(`\\b${fold(c.name)}\\b`).test(words));
+      const hint = (CAT_HINTS[r.type] || []).find(([nm, re]) => re.test(words) && cats.some(c => c.name === nm));
+      r.cat = named ? named.name : hint ? hint[0] : null;
+    }
+    if (!r.acc && prev && r.type === "out") r.acc = prev.cardId ? "card:" + prev.cardId : prev.account;
+    if (r.acc && r.acc.startsWith("card:")) r.type = "out";
+    return r;
+  }
+
+  // reconhecimento de voz: Claude (artifact) > navegador > microfone do teclado
+  let claudeDict = null, rec = null, listening = false, voiceGoWhenDone = false;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  try {
+    if (window.claude && typeof window.claude.use === "function") window.claude.use("dictation").then(d => {
+      if (!d) return;
+      claudeDict = d;
+      d.onPartial(({text}) => { if (text) $("vStatus").textContent = "Ouvindo… " + text; });
+      d.onFinal(({text}) => { const t = $("vText"); t.value = (t.value + text).replace(/^\s+/, ""); });
+      d.onState(({state, reason}) => {
+        if (state === "listening") setListening(true, "Ouvindo… toque no microfone quando terminar");
+        if (state === "idle"){
+          setListening(false, reason === "not_granted" ? "O microfone não foi liberado. Digite ou use o microfone do teclado." : "Toque no microfone e fale");
+          if (voiceGoWhenDone || (reason === "stopped" && $("vText").value.trim())){ voiceGoWhenDone = false; if ($("vText").value.trim()) voiceGo(); }
+        }
+      });
+    }).catch(() => {});
+  } catch {}
+  function setListening(on, msg){ listening = on; $("vMic").classList.toggle("listening", on); $("vMic").setAttribute("aria-label", on ? "Parar" : "Falar"); if (msg) $("vStatus").textContent = msg; }
+  function keyboardMode(msg){ setListening(false, msg); }
+  function startListening(){                // chamado direto do toque
+    if (claudeDict){
+      $("vText").value = "";
+      claudeDict.start().catch(e => { if (e && e.code !== "stopped") keyboardMode("Não deu para ouvir aqui. Digite ou use o microfone do teclado."); });
+      setListening(true, "Abrindo o microfone…");
+      return;
+    }
+    if (!SR){ keyboardMode("Toque no campo abaixo e use o microfone do teclado."); $("vText").focus(); return; }
+    try {
+      rec = new SR(); rec.lang = "pt-BR"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
+      let failed = false;
+      rec.onresult = e => { let fin = "", tmp = ""; for (const res of e.results) (res.isFinal ? (fin += res[0].transcript) : (tmp += res[0].transcript)); $("vText").value = (fin || tmp).trim(); };
+      rec.onerror = e => {
+        failed = true;
+        if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture")
+          keyboardMode("O microfone não está liberado aqui. Toque no campo abaixo e use o microfone do teclado.");
+        else if (e.error === "no-speech") setListening(false, "Não ouvi nada. Toque no microfone e tente de novo.");
+        else if (e.error !== "aborted") setListening(false, "Não consegui ouvir. Tente de novo ou digite.");
+      };
+      rec.onend = () => { const was = listening; setListening(false, failed ? null : "Toque no microfone e fale"); if (was && !failed && $("vText").value.trim()) voiceGo(); };
+      $("vText").value = "";
+      rec.start();
+      setListening(true, "Ouvindo…");
+    } catch { keyboardMode("Toque no campo abaixo e use o microfone do teclado."); $("vText").focus(); }
+  }
+  function stopListening(){
+    if (claudeDict && claudeDict.active()) return claudeDict.stop().catch(() => {});
+    if (rec){ try { rec.stop(); } catch {} }
+  }
+  function openVoice(){
+    $("vText").value = "";
+    $("bdVoice").classList.add("open");
+    startListening();
+  }
+  function closeVoice(){ voiceGoWhenDone = false; if (listening) { try { rec && rec.abort(); } catch {} if (claudeDict && claudeDict.active()) claudeDict.stop().catch(() => {}); } setListening(false, "Toque no microfone e fale"); $("bdVoice").classList.remove("open"); }
+  function voiceGo(){
+    const text = $("vText").value.trim();
+    if (!text){ $("vStatus").textContent = "Fale ou digite o lançamento primeiro."; return; }
+    if (listening){ voiceGoWhenDone = true; stopListening(); if (!claudeDict) { setListening(false); } else return; }
+    $("bdVoice").classList.remove("open");
+    const r = parseSpoken(text);
+    openForm.quiet = true; openForm(null, "me"); openForm.quiet = false;
+    setType(r.type);
+    if (r.acc && [...$("fAcc").options].some(o => o.value === r.acc)) $("fAcc").value = r.acc;
+    if (r.cents > 0) $("fAmount").value = centsInput(r.cents);
+    $("fDesc").value = r.desc || "";
+    if (r.date) $("fDate").value = r.date;
+    fInst.value = String(r.inst || 1);
+    $("fSplit").checked = !!r.split;
+    fCat = r.cat || null; renderCats(); updateHints();
+    const miss = [!(r.cents > 0) && "o valor", !r.cat && "a categoria"].filter(Boolean);
+    const heard = $("fHeard"); heard.replaceChildren("Você disse: ", h("b", {text:`“${text}”`}), miss.length ? `. Falta ${miss.join(" e ")}.` : ". Confira e toque em Salvar.");
+    heard.hidden = false;
+    if (!(r.cents > 0)) setTimeout(() => $("fAmount").focus(), 50);
+  }
+  $("micBtn").addEventListener("click", openVoice);
+  $("vMic").addEventListener("click", () => { if (listening){ voiceGoWhenDone = !!claudeDict; stopListening(); } else startListening(); });
+  $("vGo").addEventListener("click", voiceGo);
+  $("vCancel").addEventListener("click", closeVoice);
+  $("bdVoice").addEventListener("click", e => { if (e.target === $("bdVoice")) closeVoice(); });
+  $("vText").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey){ e.preventDefault(); voiceGo(); } });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && $("bdVoice").classList.contains("open")) closeVoice(); });
 
   // ---------- Seletor de mês ----------
   let pickYear = view.getFullYear();
