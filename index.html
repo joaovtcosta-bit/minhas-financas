@@ -1324,7 +1324,9 @@
   const DEFAULT_ICON = {"Alimentação":"utensils","Mercado":"cart","Transporte":"bus","Moradia":"home","Contas":"bolt","Saúde":"heart","Lazer":"ticket",
     "Educação":"book","Compras":"bag","Outros":"box","Salário":"briefcase","Freelance":"laptop","Investimentos":"trend","Presente":"gift"};
   const DEFAULT_NEEDS = ["Mercado","Moradia","Contas","Saúde","Transporte","Educação"];
-  const ACCOUNTS = ["Conta corrente","Pix / Carteira digital","Dinheiro","Poupança"];
+  const DEFAULT_ACCOUNTS = ["Conta corrente","Pix / Carteira digital","Dinheiro","Poupança"];
+  // formas de pagamento editáveis em Configurações (cartões ficam à parte)
+  const accts = () => (profile && profile.accounts && profile.accounts.length) ? profile.accounts : DEFAULT_ACCOUNTS;
   const LEGACY_CARD = "Cartão de crédito";     // nome usado antes de existirem vários cartões
   const SETTLE_CAT = "Acerto";
   const MAX_INST = 24;
@@ -1414,6 +1416,8 @@
       myName: p.myName || "",
       accent: ["laranja","menta","azul"].includes(p.accent) ? p.accent : "laranja",
       recurring: Array.isArray(p.recurring) ? p.recurring : [],
+      accounts: Array.isArray(p.accounts) && p.accounts.filter(a => typeof a === "string" && a.trim()).length
+        ? [...new Set(p.accounts.filter(a => typeof a === "string" && a.trim()).map(a => a.trim()))] : [...DEFAULT_ACCOUNTS],
       fixed: Array.isArray(p.fixed) ? p.fixed : []
     };
   }
@@ -1581,7 +1585,7 @@
         const due = `${k}-${pad(Math.min(f.day || 1, daysIn(y,m)))}`;
         const t = {id:`fx-${f.id}-${k}`, fixed:f.id, fixK:k, virtual:true, type:"out", cents, desc:f.desc, cat:f.cat,
                    date:due, due, installments:1, createdAt:0,
-                   account: card ? card.name : (f.account || ACCOUNTS[0]), fixN: i + 1, fixOf: f.months || null};
+                   account: card ? card.name : (f.account || accts()[0]), fixN: i + 1, fixOf: f.months || null};
         if (card) t.cardId = card.id;
         else {
           const pay = f.paid && f.paid[k];
@@ -2404,7 +2408,7 @@
     const tx = {
       id: uid(), type: tot > 0 ? "in" : "out", cents: Math.abs(tot), cat: SETTLE_CAT,
       desc: tot > 0 ? `Acerto com ${nameL()} (recebido)` : `Acerto com ${nameL()} (pago)`,
-      date: ymd(new Date()), account: "Pix / Carteira digital", installments: 1, settle: mk, createdAt: Date.now()
+      date: ymd(new Date()), account: accts().find(a => /pix/i.test(a)) || accts()[0], installments: 1, settle: mk, createdAt: Date.now()
     };
     b.disabled = true;
     try { await store.save(tx); render(); toast("Acerto registrado"); }
@@ -2419,14 +2423,14 @@
   // Contas + um item por cartão ("card:<id>"); uma Conta (boleto) não é paga no cartão
   function buildAccounts(noCards){
     const sel = $("fAcc"), cur = sel.value;
-    sel.replaceChildren(...ACCOUNTS.map(a => h("option", {value:a, text:a})),
+    sel.replaceChildren(...accts().map(a => h("option", {value:a, text:a})),
       ...(noCards ? [] : profile.cards.map(c => h("option", {value:"card:" + c.id, text:`💳 ${c.name}`}))));
     if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
     else if (cur && !cur.startsWith("card:")) { sel.append(h("option", {value:cur, text:cur})); sel.value = cur; }
-    else sel.value = ACCOUNTS[0];
+    else sel.value = accts()[0];
   }
   const catType = () => fType === "in" ? "in" : "out";      // Gasto e Conta usam as categorias de gasto
-  const accValueOf = t => isCard(t) ? "card:" + cardOf(t).id : (t.account || ACCOUNTS[0]);
+  const accValueOf = t => isCard(t) ? "card:" + cardOf(t).id : (t.account || accts()[0]);
   const selectedCard = () => { const v = $("fAcc").value; return v.startsWith("card:") ? profile.cards.find(c => "card:" + c.id === v) || null : null; };
 
   function readPct(){ const p = Number($("fPct").value); return Number.isInteger(p) && p >= 1 && p <= 100 ? p : NaN; }
@@ -2535,7 +2539,7 @@
     $("fAmount").value = tx ? centsInput(tx.cents) : "";
     $("fDesc").value = tx ? (tx.desc||"") : "";
     $("fDate").value = tx ? tx.date : (monthKey(view)===monthKey(new Date()) ? ymd(new Date()) : ymd(view));
-    const acc = tx ? accValueOf(tx) : ACCOUNTS[0];
+    const acc = tx ? accValueOf(tx) : accts()[0];
     if (![...$("fAcc").options].some(o => o.value === acc)) $("fAcc").append(h("option", {value:acc, text:acc}));
     $("fAcc").value = acc;
     fInst.value = String(tx ? (tx.installments||1) : 1);
@@ -3161,6 +3165,7 @@
     else if (kind === "look") content = pageLook();
     else if (kind === "rec") content = a ? pageRecEdit(a) : pageRec();
     else if (kind === "fix") content = a ? pageFixEdit(a) : pageFix();
+    else if (kind === "accts") content = a ? pageAcctEdit(a) : pageAccts();
     else if (kind === "fixm") content = pageFixMonth(a, b);
     else if (kind === "acct") content = pageAcct();
     else if (kind === "backup") content = pageBackup();
@@ -3178,6 +3183,7 @@
       h("div", {class:"set-group"},
         setRow("user", "Seu nome", profile.myName || "Não definido", () => go("me")),
         setRow("card", "Cartões de crédito", plural(profile.cards.length, "cartão", "cartões"), () => go("cards")),
+        setRow("swap", "Formas de pagamento", plural(accts().length, "opção", "opções"), () => go("accts")),
         setRow("down", "Categorias de gasto", String(catsFor("out").length), () => go("cats:out")),
         setRow("users", "Conta dividida", profile.partnerName || "Não definido", () => go("partner")),
         setRow("up", "Categorias de receita", String(catsFor("in").length), () => go("cats:in")),
@@ -3449,6 +3455,67 @@
   }
 
   // ----- Salário e receitas fixas -----
+  // ----- Formas de pagamento (o "Pagar com" do formulário) -----
+  const acctUse = nm => ownTxs.filter(t => !t.ext && !isCard(t) && t.account === nm).length
+    + profile.fixed.filter(f => !f.cardId && f.account === nm).length + profile.recurring.filter(r => r.account === nm).length;
+  function pageAccts(){
+    const list = accts();
+    return [
+      pageHead("Formas de pagamento", "menu"),
+      h("div", {class:"hint", style:"margin:0 4px 12px", text:"São as opções de “Pagar com” ao lançar. Os cartões de crédito ficam em Cartões de crédito."}),
+      h("div", {class:"set-group"},
+        list.map((a, i) => setRow("swap", a, (n => n ? plural(n, "lançamento", "lançamentos") : "sem uso")(acctUse(a)), () => go("accts:" + i))),
+        addRow("Adicionar forma de pagamento", () => go("accts:new")))
+    ];
+  }
+  function pageAcctEdit(idx){
+    const list = accts(), isNew = idx === "new", old = isNew ? "" : list[Number(idx)];
+    if (!isNew && old === undefined) return pageAccts();
+    const nameIn = h("input", {maxlength:30, placeholder:"Ex.: Nubank conta, Itaú, Vale-refeição", value: old});
+    const err = errBox();
+    const save = async () => {
+      const nm = nameIn.value.trim();
+      if (!nm) return err.textContent = "Dê um nome.";
+      if (nm.startsWith("card:")) return err.textContent = "Escolha outro nome.";
+      if (list.some((x, i) => (isNew || i !== Number(idx)) && x.toLowerCase() === nm.toLowerCase())) return err.textContent = "Já existe uma opção com esse nome.";
+      if (profile.cards.some(c => c.name.toLowerCase() === nm.toLowerCase())) return err.textContent = "Já existe um cartão com esse nome.";
+      const accounts = isNew ? [...list, nm] : list.map((x, i) => i === Number(idx) ? nm : x);
+      const renamed = !isNew && nm !== old;
+      const fixed = renamed ? profile.fixed.map(f => !f.cardId && f.account === old ? {...f, account:nm} : f) : profile.fixed;
+      const recurring = renamed ? profile.recurring.map(r => r.account === old ? {...r, account:nm} : r) : profile.recurring;
+      if (!await saveProfile({...profile, accounts, fixed, recurring})) return;
+      if (renamed){
+        const affected = ownTxs.filter(t => !t.ext && !isCard(t) && t.account === old);
+        if (affected.length){ toast(`Atualizando ${plural(affected.length, "lançamento", "lançamentos")}…`); await updateTxs(affected, {account:nm}); }
+      }
+      toast(isNew ? "Forma de pagamento criada" : "Forma de pagamento atualizada"); go("accts");
+    };
+    const used = isNew ? 0 : acctUse(old);
+    const others = list.filter((_, i) => i !== Number(idx));
+    const moveSel = h("select", {}, others.map(a => h("option", {value:a, text:a})));
+    const del = async () => {
+      if (list.length <= 1) return err.textContent = "Precisa existir pelo menos uma forma de pagamento.";
+      const to = moveSel.value || others[0];
+      const accounts = others;
+      const fixed = profile.fixed.map(f => !f.cardId && f.account === old ? {...f, account:to} : f);
+      const recurring = profile.recurring.map(r => r.account === old ? {...r, account:to} : r);
+      if (!await saveProfile({...profile, accounts, fixed, recurring})) return;
+      const affected = ownTxs.filter(t => !t.ext && !isCard(t) && t.account === old);
+      if (affected.length){ toast(`Movendo ${plural(affected.length, "lançamento", "lançamentos")} para ${to}…`); await updateTxs(affected, {account:to}); }
+      toast("Forma de pagamento excluída"); go("accts");
+    };
+    return [
+      pageHead(isNew ? "Nova forma de pagamento" : old, "accts", "Formas de pagamento"),
+      field("Nome", nameIn),
+      !isNew && used > 0 && h("div", {class:"hint", text:`Usada em ${plural(used, "lançamento", "lançamentos")} ou contas. Renomear atualiza todos.`}),
+      !isNew && used > 0 && others.length && [h("label", {text:"Ao excluir, mover para"}), moveSel],
+      err,
+      h("div", {class:"actions"},
+        !isNew && list.length > 1 && confirmBtn("Excluir", "Confirmar?", del),
+        h("button", {type:"button", class:"btn primary", text:"Salvar", onclick: save}))
+    ];
+  }
+
   // ----- Despesas fixas -----
   const fixActive = (f, k) => k >= fixFrom(f) && (!fixLast(f) || k <= fixLast(f));
   const FIX_STATE = {paid:{t:"Pago", cls:"ok"}, late:{t:"Atrasado", cls:"closed"}, pending:{t:"Pendente"}};
@@ -3541,7 +3608,7 @@
   function pageFixEdit(id){
     const isNew = id === "new";
     const cur = monthKey(new Date());
-    const f = isNew ? {desc:"", cat:"Contas", day:10, account:ACCOUNTS[0], start:cur, amounts:[]} : profile.fixed.find(x => x.id === id);
+    const f = isNew ? {desc:"", cat:"Contas", day:10, account:accts()[0], start:cur, amounts:[]} : profile.fixed.find(x => x.id === id);
     if (!f) return pageFix();
     const refK = isNew ? cur : (cur < fixFrom(f) ? fixFrom(f) : cur);
     const descIn = h("input", {maxlength:40, placeholder:"Ex.: Financiamento do carro, Netflix", value:f.desc});
@@ -3549,8 +3616,8 @@
     const dayIn = h("input", {type:"number", min:1, max:31, inputmode:"numeric", value:f.day});
     const catSel = h("select", {}, catsFor("out").map(c => h("option", {value:c.name, text:c.name})));
     catSel.value = catsFor("out").some(c => c.name === f.cat) ? f.cat : "Outros";
-    const accSel = h("select", {}, ACCOUNTS.map(a => h("option", {value:a, text:a})), profile.cards.map(c => h("option", {value:"card:" + c.id, text:`💳 ${c.name}`})));
-    accSel.value = f.cardId && profile.cards.some(c => c.id === f.cardId) ? "card:" + f.cardId : (ACCOUNTS.includes(f.account) ? f.account : ACCOUNTS[0]);
+    const accSel = h("select", {}, accts().map(a => h("option", {value:a, text:a})), profile.cards.map(c => h("option", {value:"card:" + c.id, text:`💳 ${c.name}`})));
+    accSel.value = f.cardId && profile.cards.some(c => c.id === f.cardId) ? "card:" + f.cardId : (accts().includes(f.account) ? f.account : accts()[0]);
     let term = !!f.months;
     const termSeg = h("div", {class:"seg rep-seg"});
     const monthsIn = h("input", {type:"number", min:2, max:360, inputmode:"numeric", placeholder:"Ex.: 36", value: f.months || ""});
@@ -3667,14 +3734,14 @@
   function pageRecEdit(id){
     const isNew = id === "new";
     const cur = monthKey(new Date());
-    const r = isNew ? {desc:"Salário", cat:"Salário", day:5, account:ACCOUNTS[0], start:cur, amounts:[]} : profile.recurring.find(x => x.id === id);
+    const r = isNew ? {desc:"Salário", cat:"Salário", day:5, account:accts()[0], start:cur, amounts:[]} : profile.recurring.find(x => x.id === id);
     if (!r) return pageRec();
     const catOpts = catsFor("in").map(c => h("option", {value:c.name, text:`${c.emoji} ${c.name}`}));
     const descIn = h("input", {maxlength:40, placeholder:"Ex.: Salário", value:r.desc});
     const amtIn = h("input", {class:"num", inputmode:"decimal", placeholder:"R$ 0,00", value: isNew ? "" : centsInput(recAmount(r, cur < r.start ? r.start : cur) || 0)});
     const dayIn = h("input", {type:"number", min:1, max:31, inputmode:"numeric", value:r.day});
     const catSel = h("select", {}, catOpts); catSel.value = catsFor("in").some(c => c.name === r.cat) ? r.cat : "Outros";
-    const accSel = h("select", {}, ACCOUNTS.map(a => h("option", {value:a, text:a}))); accSel.value = ACCOUNTS.includes(r.account) ? r.account : ACCOUNTS[0];
+    const accSel = h("select", {}, accts().map(a => h("option", {value:a, text:a}))); accSel.value = accts().includes(r.account) ? r.account : accts()[0];
     const fromIn = h("input", {type:"month", value: isNew ? cur : (cur < r.start ? r.start : cur)});
     const err = errBox();
     const readFrom = () => /^\d{4}-\d{2}$/.test(fromIn.value) ? fromIn.value : null;
