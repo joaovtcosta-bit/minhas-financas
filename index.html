@@ -2132,7 +2132,7 @@
         list.append(h("div", {class:"day", text: new Date(y, m-1, d).toLocaleDateString("pt-BR",{weekday:"long", day:"numeric", month:"short"})}));
       }
       const tags = [{t: isSettle(t) ? "Acerto" : t.cat}];
-      if (isRec(t) || (isFix(t) && t.fixOf !== 1)) tags.push({t: isFix(t) && t.cardId ? "Recorrente" : "Fixa", cls:"fixed"});
+      if (isRec(t) || (isFix(t) && t.fixOf !== 1)) tags.push({t: isFix(t) && (t.cardId || t.account === PARTNER_CARD) ? "Recorrente" : "Fixa", cls:"fixed"});
       if (isSplit(t)) tags.push({t:"Dividida", cls:"split"});
       list.append(txRow({
         emoji: catIcon(t.type, t.cat), title: t.desc || t.cat, tags,
@@ -2532,10 +2532,14 @@
       }
     }
     // Gasto no cartão: recorrente (só ao criar)
-    $("recWrap").hidden = partner || fType !== "out" || !card || !!editing;
+    $("recWrap").hidden = fType !== "out" || !(card || partnerCard()) || !!editing;
     const rec = recurringCard();
     const ch = $("recHint"); ch.replaceChildren();
-    if (rec && date && card){
+    if (rec && date && partner){
+      ch.append(h("b", {text:`${cents > 0 ? brl(cents) + " " : ""}todo dia ${Number(date.slice(8,10))}`}),
+        ` no cartão de ${nameL()}, a partir de ${keyLabel(date.slice(0,7))}, até você encerrar.`);
+    }
+    else if (rec && date && card){
       ch.append(h("b", {text:`${cents > 0 ? brl(cents) + " " : ""}todo dia ${Number(date.slice(8,10))}`}),
         ` na fatura do ${card.name}, a partir da fatura de ${keyLabel(invoiceKeyFor(date, card))}, até você encerrar.`);
     }
@@ -2684,14 +2688,14 @@
     if (!$("fDate").value) return $("fErr").textContent = "Informe a data.";
     const card = partner ? null : selectedCard();
     const account = partner ? (partnerCard() ? PARTNER_CARD : $("fAcc").value) : card ? card.name : $("fAcc").value;
-    const installments = (fType === "out" && ((card && !recurringCard()) || partnerCard())) ? Number(fInst.value) || 1 : 1;
+    const installments = (fType === "out" && (card || partnerCard()) && !recurringCard()) ? Number(fInst.value) || 1 : 1;
     if (cents < installments) return $("fErr").textContent = "Valor pequeno demais para esse número de parcelas.";
     const split = !partner && (fType === "out" || fType === "bill") && $("fSplit").checked;
     const pct = readPct();
     if ((partner || split) && !pct) return $("fErr").textContent = "A porcentagem deve ser um número inteiro de 1 a 100.";
 
     // Conta (boleto/conta de consumo) ou gasto recorrente no cartão: vira item de "Contas e recorrentes"
-    if (!editing && (fType === "bill" || (!partner && recurringCard()))){
+    if (!editing && (fType === "bill" || recurringCard())){
       const date = $("fDate").value, start = date.slice(0,7);
       const f = {id: uid(), desc: $("fDesc").value.trim() || fCat, cat: fCat, day: Number(date.slice(8,10)),
                  account: card ? card.name : $("fAcc").value, start, amounts:[{from:start, cents}], createdAt: Date.now()};
@@ -2703,7 +2707,8 @@
           if (!term.open){ f.months = term.tot; if (term.cur > 1){ f.start = shiftKey(start, -(term.cur - 1)); f.since = start; } }
           msg = term.open ? "Conta recorrente criada" : `Conta criada: ${term.tot - term.cur + 1} de ${term.tot} parcelas`;
         } else { f.months = 1; msg = "Conta criada"; }                    // conta avulsa: só este mês
-      } else { f.cardId = card.id; msg = `Gasto recorrente criado no ${card.name}`; }
+      } else if (partner){ f.account = PARTNER_CARD; msg = `Gasto recorrente criado no cartão de ${nameL()}`; }
+      else { f.cardId = card.id; msg = `Gasto recorrente criado no ${card.name}`; }
       if (partner){ f.payer = "partner"; f.pct = pct; }
       else if (split){ f.split = true; f.pct = pct; }
       $("fSave").disabled = true;
@@ -3933,8 +3938,9 @@
     if (cur < fixFrom(f)) return `começa em ${keyLabel(fixFrom(f))} · ${brl(recAmount(f, fixFrom(f)) || 0)}`;
     if (last && cur > last) return f.months && !f.end ? `concluída em ${keyLabel(last)}` : `encerrada em ${keyLabel(last)}`;
     const card = f.cardId && profile.cards.find(c => c.id === f.cardId);
-    const parts = [brl(recAmount(f, cur) || 0), card ? `dia ${f.day} na fatura do ${card.name}` : `vence dia ${f.day}`];
-    if (f.payer === "partner") parts.push(`paga por ${nameL()}`);
+    const pcard = f.payer === "partner" && f.account === PARTNER_CARD;
+    const parts = [brl(recAmount(f, cur) || 0), card ? `dia ${f.day} na fatura do ${card.name}` : pcard ? `dia ${f.day} no cartão de ${nameL()}` : `vence dia ${f.day}`];
+    if (f.payer === "partner"){ if (!pcard) parts.push(`paga por ${nameL()}`); }
     else if (!f.cardId){
       const [y,m] = cur.split("-").map(Number), due = `${cur}-${pad(Math.min(f.day || 1, daysIn(y,m)))}`;
       parts.push(f.paid && f.paid[cur] ? "pago" : ymd(new Date()) > due ? "atrasado" : "pendente");
@@ -4017,8 +4023,11 @@
     const dayIn = h("input", {type:"number", min:1, max:31, inputmode:"numeric", value:f.day});
     const catSel = h("select", {}, catsFor("out").map(c => h("option", {value:c.name, text:c.name})));
     catSel.value = catsFor("out").some(c => c.name === f.cat) ? f.cat : "Outros";
-    const accSel = h("select", {}, accts().map(a => h("option", {value:a, text:a})), profile.cards.map(c => h("option", {value:"card:" + c.id, text:`💳 ${c.name}`})));
-    accSel.value = f.cardId && profile.cards.some(c => c.id === f.cardId) ? "card:" + f.cardId : (accts().includes(f.account) ? f.account : accts()[0]);
+    // paga pela outra pessoa: as opções dela são as formas de pagamento + o cartão dela (não os seus cartões)
+    const accSel = h("select", {}, accts().map(a => h("option", {value:a, text:a})),
+      f.payer === "partner" ? h("option", {value:PARTNER_CARD, text:`💳 ${PARTNER_CARD}`}) : profile.cards.map(c => h("option", {value:"card:" + c.id, text:`💳 ${c.name}`})));
+    accSel.value = f.cardId && profile.cards.some(c => c.id === f.cardId) ? "card:" + f.cardId
+      : (accts().includes(f.account) || (f.payer === "partner" && f.account === PARTNER_CARD) ? f.account : accts()[0]);
     let term = !!f.months;
     const termSeg = h("div", {class:"seg rep-seg"});
     const monthsIn = h("input", {type:"number", min:2, max:360, inputmode:"numeric", placeholder:"Ex.: 36", value: f.months || ""});
