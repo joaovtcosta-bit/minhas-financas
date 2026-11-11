@@ -2723,7 +2723,7 @@
   };
   const CAT_HINTS = {
     out: [
-      ["Compras", /\b(mercado livre|shopee|amazon|shopping|loja|roupas?|tenis|sapatos?|presentes?|eletronicos?|magalu)\b/],
+      ["Compras", /\b(mercado livre|shopee|amazon|shopping|loja|roupas?|tenis|sapatos?|presentes?|eletronicos?|eletrodomesticos?|magalu|tv|televisao|geladeira|fogao|micro-?ondas|notebook|computador|tablet|ipad|iphone|fones?|fone de ouvido|monitor|moveis?|sofa|colchao|perfume|maquiagem|relogio|oculos)\b/],
       ["Mercado", /\b(supermercado|mercadinho|mercado|feira|atacadao|assai|hortifruti|sacolao|acougue|carrefour)\b/],
       ["Alimentação", /\b(padaria|restaurante|lanchonete|lanches?|almoco|jantar|janta|cafe|cafeteria|ifood|pizza|pizzaria|hamburguer|burger|sorvete|acai|comida|marmita|bar|cerveja|delivery|sushi|pastel|salgados?|doceria)\b/],
       ["Transporte", /\b(uber|99|taxi|gasolina|combustivel|posto|onibus|metro|estacionamento|pedagio|passagem|trem|etanol|alcool|lava jato|oficina)\b/],
@@ -2764,13 +2764,19 @@
     }
 
     // parcelas
-    const inst = blank(/\b(?:parcelad[oa]\s+)?(?:em\s+)?(\d{1,2})\s*(?:x|vezes)\b/g)[0];
-    if (inst){ const k = Number(inst[1]); if (k >= 2 && k <= MAX_INST) r.inst = k; }
+    // o iPhone escreve números pequenos por extenso ("em três vezes"); "dividido em 3 vezes" é parcela, não divisão
+    const N = "(\\d{1,2}|vinte e (?:um|uma|dois|duas|tres|quatro)|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte)";
+    const instNum = t => /^\d+$/.test(t) ? Number(t) : wordsToNum(t);
+    const inst = blank(new RegExp(`\\b(?:(?:parcelad[oa]|dividid[oa]|pago)\\s+)?(?:em\\s+)?${N}\\s*(?:x|vezes|parcelas?)\\b`, "g"))[0]
+              || blank(new RegExp(`\\bparcelad[oa]\\s+em\\s+${N}\\b`, "g"))[0];
+    if (inst){ const k = instNum(inst[1]); if (k >= 2 && k <= MAX_INST) r.inst = k; }
+    else if (blank(/\b(?:a vista|avista)\b/g).length) r.inst = 1;
 
     // valor
     const toCents = (int, dec) => Math.round(Number(String(int).replace(/\./g, "")) * 100) + (dec ? Number((dec + "0").slice(0, 2)) : 0);
     let m;
-    if ((m = blank(/(\d{1,3}(?:\.\d{3})+|\d+)\s*(?:reais|real)\s+e\s+(\d{1,2})(?:\s*centavos?)?\b/)[0])) r.cents = toCents(m[1], m[2].padStart(2, "0"));
+    if ((m = blank(/(?:r\$\s*)?\b(\d+)(?:[,.](\d))?\s*mil\b(?:\s*(?:reais|real))?/)[0])) r.cents = (Number(m[1]) * 1000 + (m[2] ? Number(m[2]) * 100 : 0)) * 100;
+    else if ((m = blank(/(\d{1,3}(?:\.\d{3})+|\d+)\s*(?:reais|real)\s+e\s+(\d{1,2})(?:\s*centavos?)?\b/)[0])) r.cents = toCents(m[1], m[2].padStart(2, "0"));
     else if ((m = blank(/r\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:[,.](\d{1,2}))?/)[0])) r.cents = toCents(m[1], m[2]);
     else if ((m = blank(/\b(\d{1,3}(?:\.\d{3})+|\d+)(?:[,.](\d{1,2}))?\s*(?:reais|real|contos?|pila|r\$)/)[0])) r.cents = toCents(m[1], m[2]);
     else if ((m = blank(/\b((?:(?:um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa|cem|cento|duzentos|duzentas|trezentos|quatrocentos|quinhentos|seiscentos|setecentos|oitocentos|novecentos|mil|e)\s+)+)(?:reais|real|contos?)\b/)[0])){
