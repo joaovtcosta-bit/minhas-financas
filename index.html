@@ -917,6 +917,7 @@
   .voice-heard b{color:var(--text);font-weight:600}
   #repWrap .switch-row{margin-top:14px}
   .rep-seg{margin:10px 0 0}
+  .payer-seg{margin-bottom:4px}
   #recWrap .switch-row{margin-top:14px}
   .seg.seg3{grid-template-columns:repeat(3,1fr)}
   .seg button.on.bill-t{color:var(--accent)}
@@ -1294,6 +1295,13 @@
         <span id="splitLbl">Dividir</span>
         <input type="checkbox" id="fSplit" class="switch">
       </label>
+      <div id="payerWrap" hidden>
+        <label>Quem pagou</label>
+        <div class="seg payer-seg" id="payerSeg">
+          <button type="button" data-payer="me">Eu</button>
+          <button type="button" data-payer="partner" id="payerOther">Outra pessoa</button>
+        </div>
+      </div>
       <div id="pctWrap" hidden>
         <label for="fPct" id="pctLbl">Parte da outra pessoa (%)</label>
         <div class="pct-row">
@@ -2536,6 +2544,7 @@
     const showSplit = partner || fType === "out" || fType === "bill";
     $("splitWrap").hidden = !showSplit;
     $("splitRow").hidden = partner;
+    $("payerWrap").hidden = !(partner || (fType === "out" && $("fSplit").checked && !recurringCard()));
     $("splitLbl").textContent = `Dividir com ${nameL()}`;
     const on = partner || $("fSplit").checked;
     $("pctWrap").hidden = !(showSplit && on);
@@ -2548,6 +2557,8 @@
       sh.append(h("b", {text: n > 1 ? `${who} ${brl(shareOf(parts[1], p))} por mês` : `${who} ${brl(shareOf(cents, p))}`}));
       if (n > 1) sh.append(` · ${brl(parts.reduce((s,c) => s + shareOf(c,p), 0))} no total`);
     }
+    if (partner && store && store.mode === "supabase")
+      sh.append(sh.childNodes.length ? " · " : "", "Use quando a compra não for lançada no app da outra pessoa, para não contar duas vezes.");
   }
 
   function setType(t){
@@ -2564,18 +2575,25 @@
         onclick: () => { fCat = c.name; renderCats(); }}, catIcon(ct, c.name), h("span", {text:c.name}))),
       h("button", {type:"button", class:"chip", onclick: () => { $("newCat").classList.add("open"); $("newCatName").focus(); }}, icon("plus"), h("span", {text:"Nova"})));
   }
+  // "me" = você pagou; "partner" = a outra pessoa pagou (você deve a sua parte)
+  function paintMode(){
+    const partner = formMode === "partner";
+    $("formTitle").textContent = partner
+      ? (editing ? `Editar compra de ${nameL()}` : `Compra de ${nameL()}`)
+      : (editing ? "Editar lançamento" : "Novo lançamento");
+    $("fSeg").hidden = partner;
+    $("fAccWrap").hidden = partner;
+    $("fRow").style.gridTemplateColumns = partner ? "1fr" : "";
+    $("payerOther").textContent = name();
+    document.querySelectorAll("#payerSeg button").forEach(b => b.classList.toggle("on", b.dataset.payer === formMode));
+  }
   function openForm(tx, mode){
     if (tx && tx.ext){ toast(`Registrado na conta de ${nameL()}. Só quem registrou pode editar.`); return; }
     if (tx && tx.virtual){ closeForm(); openCfg("fix:" + tx.fixed); return; }
     editing = tx || null;
-    formMode = tx ? (isPartner(tx) ? "partner" : "me") : (mode || "me");
+    formMode = tx ? (isPartner(tx) ? "partner" : "me") : (mode === "partner" ? "partner" : "me");
     const partner = formMode === "partner";
-    $("formTitle").textContent = partner
-      ? (tx ? `Editar compra de ${nameL()}` : `Compra de ${nameL()}`)
-      : (tx ? "Editar lançamento" : "Novo lançamento");
-    $("fSeg").hidden = partner;
-    $("fAccWrap").hidden = partner;
-    $("fRow").style.gridTemplateColumns = partner ? "1fr" : "";
+    paintMode();
     buildAccounts();
     $("fAmount").value = tx ? centsInput(tx.cents) : "";
     $("fDesc").value = tx ? (tx.desc||"") : "";
@@ -2584,7 +2602,7 @@
     if (![...$("fAcc").options].some(o => o.value === acc)) $("fAcc").append(h("option", {value:acc, text:acc}));
     $("fAcc").value = acc;
     fInst.value = String(tx ? (tx.installments||1) : 1);
-    $("fSplit").checked = !!(tx && tx.split);
+    $("fSplit").checked = !!(tx && tx.split) || (!tx && mode === "split");   // aberto pela aba Divisão: já vem dividido
     $("fRep").checked = false; $("fRec").checked = false; $("fRepN").value = ""; $("fRepCur").value = "";
     // ao editar um lançamento, não dá para transformá-lo em Conta
     document.querySelector('#fSeg button[data-type="bill"]').disabled = !!tx;
@@ -2603,7 +2621,16 @@
   ["fAcc","fInst","fDate","fSplit","fRep","fRec"].forEach(id => $(id).addEventListener("change", updateHints));
   ["fAmount","fPct","fRepN","fRepCur"].forEach(id => $(id).addEventListener("input", updateHints));
   document.querySelectorAll("#pctQuick .chip").forEach(c => c.addEventListener("click", () => { $("fPct").value = c.dataset.p; updateHints(); }));
-  $("addBtn").addEventListener("click", () => openForm(null, tab === "divisao" ? "partner" : "me"));
+  $("addBtn").addEventListener("click", () => openForm(null, tab === "divisao" ? "split" : "me"));
+  document.querySelectorAll("#payerSeg button").forEach(b => b.addEventListener("click", () => {
+    const to = b.dataset.payer;
+    if (to === formMode) return;
+    // a porcentagem muda de lado: "parte da outra pessoa" <-> "sua parte"
+    const p = readPct(); if (p){ const q = 100 - p; $("fPct").value = q >= 1 ? q : 50; }
+    formMode = to;
+    if (to === "me") $("fSplit").checked = true;
+    paintMode(); setType("out");
+  }));
   $("fCancel").addEventListener("click", closeForm);
   $("bd").addEventListener("click", e => { if (e.target === $("bd")) closeForm(); });
   document.addEventListener("keydown", e => { if (e.key==="Escape"){ closeForm(); closeCfg(); closeMonth(); } });
@@ -2612,7 +2639,7 @@
     if (e.metaKey || e.ctrlKey || e.altKey || document.querySelector(".backdrop.open")) return;
     if (/^(INPUT|SELECT|TEXTAREA)$/.test((e.target && e.target.tagName) || "")) return;
     if (e.key === "ArrowLeft" || e.key === "ArrowRight"){ e.preventDefault(); view.setMonth(view.getMonth() + (e.key === "ArrowRight" ? 1 : -1)); render(); }
-    else if (e.key === "n" || e.key === "N"){ e.preventDefault(); openForm(null, tab === "divisao" ? "partner" : "me"); }
+    else if (e.key === "n" || e.key === "N"){ e.preventDefault(); openForm(null, tab === "divisao" ? "split" : "me"); }
   });
 
   $("newCatOk").addEventListener("click", async () => {
