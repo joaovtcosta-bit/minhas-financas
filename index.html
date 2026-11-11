@@ -909,6 +909,7 @@
   @keyframes voicePulse{from{transform:scale(.9);opacity:.9}to{transform:scale(1.25);opacity:0}}
   @media (prefers-reduced-motion:reduce){ .voice-mic.listening::after{animation:none;opacity:.6} }
   .voice-status{font-size:14px;color:var(--muted);min-height:20px;margin-bottom:6px}
+  .voice-trace{font:11px/1.4 ui-monospace,Menlo,monospace;color:var(--muted2);margin:-2px 0 8px}
   .voice-text{width:100%;padding:14px 16px;border-radius:16px;background:var(--raised);border:1px solid transparent;color:var(--text);
     font:inherit;font-size:16px;resize:none;outline:none}
   .voice-text:focus{border-color:var(--accent)}
@@ -1222,6 +1223,7 @@
     <h3>Ditar lançamento</h3>
     <button type="button" class="voice-mic" id="vMic" aria-label="Falar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M8.5 21h7"/></svg></button>
     <div class="voice-status" id="vStatus" aria-live="polite">Toque no microfone e fale</div>
+    <div class="voice-trace" id="vTrace" hidden></div>
     <label for="vText">O que você disse</label>
     <textarea id="vText" class="voice-text" rows="2" maxlength="200" placeholder="Ex.: gastei 5 reais no crédito na padaria"></textarea>
     <div class="hint">Diga o valor, onde foi e como pagou. Ex.: “32,90 no Pix no mercado”, “almoço 45 reais no débito, dividido”, “recebi 500 de freela”.</div>
@@ -2868,7 +2870,7 @@
   // Reconhecimento do navegador (Safari/Chrome). No iPhone, uma 2ª sessão às vezes trava sem dar sinal nenhum.
   // Por isso: cada sessão é encerrada de propósito (stop ao ouvir a frase, abort ao fechar), um vigia percebe
   // quando o microfone não responde, e depois de um travamento a próxima tentativa usa uma instância nova.
-  let srInst = null, srFresh = false, srTimer = null, srSession = 0, srHangs = 0;
+  let srInst = null, srFresh = false, srTimer = null, srSession = 0, srHangs = 0, srTap = null;
   // aprende neste aparelho se o microfone funciona melhor reaproveitando a instância ou criando uma nova a cada vez
   let srAlwaysFresh = (() => { try { return localStorage.getItem("mf-sr-fresh") === "1"; } catch { return false; } })();
   const learnSr = v => { srAlwaysFresh = v; try { localStorage.setItem("mf-sr-fresh", v ? "1" : "0"); } catch {} };
@@ -2883,26 +2885,39 @@
     if (!srInst || srFresh || srAlwaysFresh){ srInst = null; srFresh = false; }
     const reused = !!srInst;
     let failed = false, alive = false;
+    const trace = [];
+    const mark = ev => { if (trace[trace.length - 1] !== ev) trace.push(ev); };
+    const showTrace = () => { const t = $("vTrace"); t.textContent = "sinais: " + (trace.join(" · ") || "nenhum") + (reused ? " · reaproveitado" : " · novo"); t.hidden = false; };
+    srTap = () => {                          // toque no microfone enquanto "Ouvindo…"
+      if ($("vText").value.trim()){ srKill(); done(true); return; }
+      hung(true);
+    };
     const done = go => {
       if (id !== srSession) return;
       clearTimeout(srTimer);
       const was = listening;
       setListening(false, failed ? null : "Toque no microfone e fale");
-      if (go && was && !failed && $("vText").value.trim()){ srSession++; srHangs = 0; voiceGo(); }
+      if (go && was && !failed && $("vText").value.trim()){ srSession++; srHangs = 0; $("vTrace").hidden = true; voiceGo(); }
     };
-    const hung = () => {
+    // travou: avisa; se veio de um toque, já tenta de novo com instância nova (ainda dentro do toque);
+    // depois de 2 travadas seguidas, passa para o microfone do teclado
+    const hung = byTap => {
       if (id !== srSession) return;
       failed = true; srFresh = true; srHangs++;
-      learnSr(reused);                       // travou reaproveitando: daqui em diante usa instância nova (e vice-versa)
+      if (!alive) learnSr(reused);           // travou reaproveitando: daqui em diante usa instância nova (e vice-versa)
+      showTrace();
       srKill(); srInst = null; clearTimeout(srTimer);
-      setListening(false, srHangs > 1
-        ? "O iPhone não está liberando o microfone de novo. Toque no campo abaixo e use o microfone do teclado."
-        : "O microfone não respondeu. Toque nele de novo.");
-      if (srHangs > 1) $("vText").focus();
+      if (srHangs >= 2){
+        setListening(false, "O iPhone travou o microfone. Toque no campo abaixo e use o microfone do teclado; recarregar o app também resolve.");
+        if (byTap) $("vText").focus();
+        return;
+      }
+      if (byTap){ srStart(); return; }
+      setListening(false, "O microfone não respondeu. Toque nele de novo.");
     };
-    const onAlive = () => { alive = true; };
+    const onAlive = ev => () => { alive = true; mark(ev); };
     const onResult = e => {
-      alive = true;
+      alive = true; mark("resultado");
       let fin = "", tmp = "";
       for (const res of e.results) (res.isFinal ? (fin += res[0].transcript) : (tmp += res[0].transcript));
       $("vText").value = (fin || tmp).trim();
@@ -2915,31 +2930,37 @@
     };
     const onError = e => {
       if (id !== srSession) return;
-      failed = true;
+      failed = true; mark("erro " + e.error);
       if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture")
         keyboardMode("O microfone não está liberado aqui. Toque no campo abaixo e use o microfone do teclado.");
       else if (e.error === "no-speech") setListening(false, "Não ouvi nada. Toque no microfone e tente de novo.");
       else if (e.error !== "aborted"){ srFresh = true; setListening(false, "Não consegui ouvir. Toque no microfone de novo ou digite."); }
       done(false);
     };
-    const onEnd = () => done(true);
+    const onEnd = () => { mark("fim"); done(true); };
     const wire = r => { r.lang = "pt-BR"; r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
-      r.onstart = r.onaudiostart = onAlive; r.onresult = onResult; r.onerror = onError; r.onend = onEnd; return r; };
+      r.onstart = () => mark("start"); r.onaudiostart = onAlive("áudio"); r.onsoundstart = onAlive("som"); r.onspeechstart = onAlive("fala");
+      r.onresult = onResult; r.onerror = onError; r.onend = onEnd; return r; };
     try { srInst = wire(srInst || new SR()); srInst.start(); }
     catch {                                   // ainda presa da sessão anterior: tenta com uma instância nova
       try { srKill(); srInst = wire(new SR()); srInst.start(); }
       catch { srInst = null; keyboardMode("Toque no campo abaixo e use o microfone do teclado."); $("vText").focus(); return; }
     }
-    setListening(true, "Ouvindo…");
-    // vigia: sem sinal do microfone em 4 s = travou; sessão longa demais (12 s) = encerra
+    $("vTrace").hidden = true;
+    setListening(true, "Ouvindo… pode falar");
+    // vigia: sem áudio em 3 s avisa que dá para tocar de novo; sem áudio em 5 s = travou; sessão longa (12 s) = encerra
     srTimer = setTimeout(() => {
       if (id !== srSession || !listening) return;
-      if (!alive) return hung();
+      if (!alive) $("vStatus").textContent = "Ouvindo… se nada acontecer, toque no microfone";
       srTimer = setTimeout(() => {
         if (id !== srSession || !listening) return;
-        if ($("vText").value.trim()){ srKill(); done(true); } else hung();
-      }, 8000);
-    }, 4000);
+        if (!alive) return hung(false);
+        srTimer = setTimeout(() => {
+          if (id !== srSession || !listening) return;
+          if ($("vText").value.trim()){ srKill(); done(true); } else hung(false);
+        }, 7000);
+      }, 2000);
+    }, 3000);
   }
   function srStop(){ if (srInst && listening){ try { srInst.stop(); } catch {} } }
   document.addEventListener("visibilitychange", () => {
@@ -2951,6 +2972,7 @@
     srStop();
   }
   function openVoice(){
+    srHangs = 0;                             // contagem de travadas recomeça a cada abertura da janela
     $("vText").value = "";
     $("bdVoice").classList.add("open");
     startListening();
@@ -2984,7 +3006,11 @@
     if (!(r.cents > 0)) setTimeout(() => $("fAmount").focus(), 50);
   }
   $("micBtn").addEventListener("click", openVoice);
-  $("vMic").addEventListener("click", () => { if (listening){ voiceGoWhenDone = !!claudeDict; stopListening(); } else startListening(); });
+  $("vMic").addEventListener("click", () => {
+    if (!listening) return startListening();
+    if (claudeDict){ voiceGoWhenDone = true; stopListening(); return; }
+    if (srTap) srTap();
+  });
   $("vGo").addEventListener("click", voiceGo);
   $("vCancel").addEventListener("click", closeVoice);
   $("bdVoice").addEventListener("click", e => { if (e.target === $("bdVoice")) closeVoice(); });
