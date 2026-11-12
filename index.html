@@ -1796,6 +1796,8 @@
     if (!d) return null;
     const base = {id: "p:" + id, ext: true, desc: d.desc, cat: d.cat, date: d.date, createdAt: d.createdAt || 0};
     if (/^\d{4}-\d{2}$/.test(d.divKey || "")) base.divKey = d.divKey;
+    // "só daqui pra frente": parcelas antes deste mês também não são cobradas do lado de cá
+    if (/^\d{4}-\d{2}$/.test(d.skipBefore || "")) base.skipBefore = d.skipBefore;
     // compra que VOCÊ pagou e a outra pessoa registrou no app dela ("Quem pagou: outra pessoa" do lado dela):
     // entra na sua Divisão como paga por você; o pct dela é a parte dela, que vira "parte da outra pessoa" aqui
     if (d.payer === "partner")
