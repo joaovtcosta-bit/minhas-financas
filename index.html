@@ -1850,6 +1850,10 @@
   function supabaseStore(){
     let cb = null, timer = null, loading = false, again = false;
     let mine = new Map();   // suas linhas gravadas (id -> data), para saber o que precisa atualizar
+    // o banco (jsonb) devolve os campos em outra ordem: compara com as chaves ordenadas
+    const same = (a, b) => { const norm = v => Array.isArray(v) ? v.map(norm) : v && typeof v === "object"
+      ? Object.keys(v).sort().reduce((o, k) => (v[k] === undefined ? o : (o[k] = norm(v[k]), o)), {}) : v;
+      return JSON.stringify(norm(a)) === JSON.stringify(norm(b)); };
     let syncing = false;
     // Mantém as cópias compartilhadas das contas divididas e grava o mês da fatura (divKey) em compras divididas antigas.
     async function syncShared(p){
@@ -1859,7 +1863,7 @@
         const up = [], del = [];
         const want = new Map();
         for (const f of p.fixed || []){ const d = sharedFixedDef(f, p); if (d) want.set("fx:" + f.id, d); }
-        for (const [id, d] of want) if (JSON.stringify(mine.get(id)) !== JSON.stringify(d)) up.push({user_id: me.id, id, data: d});
+        for (const [id, d] of want) if (!same(mine.get(id), d)) up.push({user_id: me.id, id, data: d});
         for (const [id, d] of mine) if (d && d.fixedDef && !want.has(id)) del.push(id);
         for (const [id, d] of mine){
           if (!d || d.fixedDef || !d.split || d.payer || !d.cardId || d.divKey || !d.date) continue;
@@ -2058,11 +2062,11 @@
     else setSync("", "Conectando…");
     store = s;
     store.subscribe(
-      list => { ownTxs = list; render(); if ($("bdCfg").classList.contains("open")) renderCfg(); },
+      list => { ownTxs = list; render(); if ($("bdCfg").classList.contains("open") && !typingInCfg()) renderCfg(); },
       p => {
         profile = normProfile(p); applyAccent(); render();
         if ($("bd").classList.contains("open")) { buildAccounts(); renderCats(); updateHints(); }
-        if ($("bdCfg").classList.contains("open")) renderCfg();
+        if ($("bdCfg").classList.contains("open") && !typingInCfg()) renderCfg();
       }
     );
   }
@@ -3703,6 +3707,8 @@
   // Páginas: menu · cards · card:<id|new> · cats:<out|in> · cat:<out|in>:<índice|new> · partner · rec · rec:<id|new>
   // =====================================================================
   let cfgPage = "menu";
+  // atualização vinda da nuvem não redesenha a tela enquanto um campo dela está em uso (fecharia o teclado)
+  const typingInCfg = () => { const a = document.activeElement; return !!(a && $("cfgSheet").contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)); };
   function openCfg(page = "menu"){ cfgPage = page; renderCfg(); $("bdCfg").classList.add("open"); }
   function closeCfg(){ $("bdCfg").classList.remove("open"); }
   function go(page){ cfgPage = page; renderCfg(); $("cfgSheet").scrollTop = 0; }
