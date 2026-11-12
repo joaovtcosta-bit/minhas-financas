@@ -1421,6 +1421,7 @@
   //   partnerName  recurring:[{id,desc,cat,day,account,start,end?,amounts:[{from,cents}]}]
   let txs = [];        // tudo que os cálculos usam: lançamentos gravados + despesas fixas geradas
   let ownTxs = [];     // só os lançamentos gravados (o que vem do armazenamento)
+  let partnerFixed = []; // contas/recorrentes divididos da outra conta (cópias compartilhadas), viram lançamentos só da Divisão
   let profile = normProfile({});
   let view = new Date(); view.setDate(1);
   const TABS = {resumo:"Resumo", divisao:"Divisão", analise:"Análise"};
@@ -1577,7 +1578,8 @@
   const isCard    = t => !isPartner(t) && (!!t.cardId || t.account === LEGACY_CARD);
   const isSplit   = t => !isPartner(t) && t.type === "out" && !!t.split;
   const pctOf     = t => Number.isFinite(t.pct) ? t.pct : 50;
-  const instOf    = t => (t.type === "out" && (isCard(t) || isPartner(t))) ? Math.max(1, t.installments||1) : 1;
+  // parcelas valem para cartão, compra paga pela outra pessoa e compra que ela registrou como paga por você (byOther)
+  const instOf    = t => (t.type === "out" && (isCard(t) || isPartner(t) || t.byOther)) ? Math.max(1, t.installments||1) : 1;
   const shareOf   = (cents, pct) => Math.round(cents * pct / 100);
   function cardOf(t){
     return profile.cards.find(c => c.id === t.cardId)
@@ -1696,10 +1698,46 @@
     }
     return out;
   }
+  // Contas e recorrentes divididos ficam no perfil (que é privado). Para a Divisão bater nos dois lados, cada conta
+  // grava uma cópia mínima de cada conta dividida em `transactions` (id "fx:<id>", data.fixedDef), sem forma de pagamento
+  // nem nome de cartão. Aqui elas viram lançamentos só de leitura (ext) do lado da outra pessoa.
+  function sharedFixedDef(f, p){
+    if (!f.start || !(f.split || f.payer === "partner")) return null;
+    const card = f.cardId && f.payer !== "partner" ? (p.cards || []).find(c => c.id === f.cardId) : null;
+    const d = {fixedDef: 1, desc: f.desc || "", cat: f.cat, day: f.day || 1, start: f.start, amounts: f.amounts || [],
+               pct: Number.isFinite(f.pct) ? f.pct : 50, createdAt: f.createdAt || 0};
+    for (const k of ["since", "months", "end"]) if (f[k]) d[k] = f[k];
+    if (f.payer === "partner") d.payer = "partner"; else d.split = true;
+    if (card) d.card = {closeDay: card.closeDay, dueDay: card.dueDay};
+    if (!card && f.payer !== "partner" && f.paid){
+      const pc = {}; for (const k in f.paid) if (f.paid[k] && f.paid[k].cents > 0) pc[k] = f.paid[k].cents;
+      if (Object.keys(pc).length) d.paidCents = pc;
+    }
+    return d;
+  }
+  function partnerFixedTxs(untilK){
+    const out = [];
+    for (const d of partnerFixed){
+      const last = fixLast(d), stop = last && last < untilK ? last : untilK;
+      for (let k = fixFrom(d), i = 0; k <= stop && i < 600; k = shiftKey(k, 1), i++){
+        const cents = (d.paidCents && d.paidCents[k]) || recAmount(d, k);
+        if (!cents) continue;
+        const [y,m] = k.split("-").map(Number);
+        const date = `${k}-${pad(Math.min(d.day || 1, daysIn(y,m)))}`;
+        const t = {id: `p:fx-${d.id}-${k}`, ext: true, virtual: true, type: "out", cents, desc: d.desc, cat: d.cat, date,
+                   installments: 1, createdAt: 0, account: "", pct: Number.isFinite(d.pct) ? d.pct : 50};
+        // conta dividida dela -> paga por ela (pct = sua parte); conta que ela marcou como paga por você -> você pagou
+        if (d.payer === "partner"){ t.split = true; t.byOther = true; } else t.payer = "partner";
+        if (d.card) t.divKey = invoiceKeyFor(date, d.card);
+        out.push(t);
+      }
+    }
+    return out;
+  }
   // monta a lista usada pelos cálculos; as fixas vão até o mês atual ou o mês que você está vendo, o que vier depois
   function rebuildTxs(){
-    const nowK = monthKey(new Date()), viewK = monthKey(view);
-    txs = [...ownTxs, ...fixedTxs(viewK > nowK ? viewK : nowK)];
+    const nowK = monthKey(new Date()), viewK = monthKey(view), until = viewK > nowK ? viewK : nowK;
+    txs = [...ownTxs, ...fixedTxs(until), ...partnerFixedTxs(until)];
   }
 
   // Lançamentos do mês fora do cartão (compras dela não entram: não saíram do seu bolso)
@@ -1811,6 +1849,30 @@
 
   function supabaseStore(){
     let cb = null, timer = null, loading = false, again = false;
+    let mine = new Map();   // suas linhas gravadas (id -> data), para saber o que precisa atualizar
+    let syncing = false;
+    // Mantém as cópias compartilhadas das contas divididas e grava o mês da fatura (divKey) em compras divididas antigas.
+    async function syncShared(p){
+      if (syncing || !p) return;
+      syncing = true;
+      try {
+        const up = [], del = [];
+        const want = new Map();
+        for (const f of p.fixed || []){ const d = sharedFixedDef(f, p); if (d) want.set("fx:" + f.id, d); }
+        for (const [id, d] of want) if (JSON.stringify(mine.get(id)) !== JSON.stringify(d)) up.push({user_id: me.id, id, data: d});
+        for (const [id, d] of mine) if (d && d.fixedDef && !want.has(id)) del.push(id);
+        for (const [id, d] of mine){
+          if (!d || d.fixedDef || !d.split || d.payer || !d.cardId || d.divKey || !d.date) continue;
+          const card = (p.cards || []).find(c => c.id === d.cardId);
+          if (card) up.push({user_id: me.id, id, data: {...d, divKey: invoiceKeyFor(d.date, card)}});
+        }
+        for (let i = 0; i < up.length; i += 200){ const {error} = await supa.from("transactions").upsert(up.slice(i, i + 200)); if (error) throw error; }
+        if (del.length){ const {error} = await supa.from("transactions").delete().eq("user_id", me.id).in("id", del); if (error) throw error; }
+        for (const r of up) mine.set(r.id, r.data);
+        for (const id of del) mine.delete(id);
+      } catch (e){ console.error("sync divisão", e); }
+      finally { syncing = false; }
+    }
     async function load(){
       if (loading){ again = true; return; }
       loading = true;
@@ -1821,13 +1883,20 @@
         ]);
         if (tx.error) throw tx.error;
         if (pr.error) throw pr.error;
-        const list = [];
+        const list = [], pf = [];
+        mine = new Map();
         for (const r of tx.data){
-          if (r.user_id === me.id) list.push({...r.data, id: r.id});
+          if (r.user_id === me.id){
+            mine.set(r.id, r.data);
+            if (!(r.data && r.data.fixedDef)) list.push({...r.data, id: r.id});
+          } else if (r.data && r.data.fixedDef) pf.push({...r.data, id: String(r.id).replace(/^fx:/, "")});
           else { const t = fromPartner(r.id, r.data); if (t) list.push(t); }
         }
-        cb.onProfile(pr.data ? pr.data.data : {});
+        partnerFixed = pf;
+        const prof = pr.data ? pr.data.data : {};
+        cb.onProfile(prof);
         cb.onTx(list);
+        syncShared(normProfile(prof));
         setSync("ok", "Sincronizado");
       } catch (e){ console.error(e); setSync("warn", "Erro ao sincronizar"); }
       finally { loading = false; if (again){ again = false; load(); } }
@@ -1868,6 +1937,7 @@
       async saveProfile(p){
         const {error} = await supa.from("profiles").upsert({user_id: me.id, data: p});
         if (error) throw error;
+        syncShared(p);
       }
     };
   }
