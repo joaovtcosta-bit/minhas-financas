@@ -81,6 +81,9 @@
   .eyebrow{font-size:13px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
   .big{font-size:40px;font-weight:750;letter-spacing:-.035em;margin:6px 0 2px;line-height:1.1}
   .caption{font-size:15px;color:var(--muted)}
+  .recv-tag{display:inline-block;margin-left:6px;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;
+    color:#6ee7a8;background:rgba(25,158,112,.16);border:1px solid rgba(110,231,168,.28);vertical-align:1px;white-space:nowrap}
+  .cash-line{margin-top:3px;font-size:13px;color:var(--muted)}
   .legend{margin-top:14px;display:grid;gap:6px;font-size:15px;color:#c7c7cc}
   .legend span{display:flex;align-items:center;gap:10px}
   .legend i{width:9px;height:9px;border-radius:50%;display:inline-block}
@@ -995,7 +998,8 @@
         <div>
           <div class="eyebrow" id="heroMonth">Novembro</div>
           <div class="bal-row"><div class="big num" id="vBal">R$ 0,00</div><button type="button" class="hide-btn" id="hideBtn" aria-label="Ocultar valores" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path class="eye-open" d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle class="eye-open" cx="12" cy="12" r="3"/><path class="eye-shut" d="M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.6 9.6 0 0 0 4.4-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg></button></div>
-          <div class="caption">Saldo do mês</div>
+          <div class="caption">Saldo do mês <span class="recv-tag" id="recvTag" hidden></span></div>
+          <div class="cash-line num" id="cashLine" hidden></div>
           <div class="legend">
             <span><i style="background:var(--green)"></i><span class="num" id="vIn">R$ 0,00</span>&nbsp;entradas</span>
             <span><i style="background:#d95926"></i><span class="num" id="vOut">R$ 0,00</span>&nbsp;saídas</span>
@@ -1496,6 +1500,7 @@
       cats:{out:mkCats("out"), in:mkCats("in")},
       paid: p.paid || {},
       partnerName: p.partnerName && p.partnerName !== "Namorada" ? p.partnerName : "",
+      divInBalance: p.divInBalance !== false,   // conta a Divisão no saldo do Resumo (padrão: sim)
       myName: p.myName || "",
       accent: ["laranja","menta","azul"].includes(p.accent) ? p.accent : "laranja",
       recurring: Array.isArray(p.recurring) ? p.recurring : [],
@@ -1773,6 +1778,29 @@
     const settles = txs.filter(t => isSettle(t) && t.settle === mk);
     const monthNet = month.reduce((s,i) => s + (i.who === "me" ? i.share : -i.share), 0);
     return { carry, monthNet, total: carry + (net[mk]||0), month, settles };
+  }
+
+  // Ajuste do saldo pela Divisão no mês `mk` (Config › Conta dividida › "Contar a divisão no saldo").
+  // + parte da outra pessoa no que você pagou (a receber); − sua parte no que ela pagou (a pagar);
+  // acerto registrado por você: o Pix que entra/sai já mexe no saldo, então o ajuste anula (entrou +X → −X; saiu −X → +X).
+  // Acertos registrados pela outra pessoa (ext) não entram no seu saldo, então também não mexem aqui.
+  // ev: [{day, v, label}] para o gráfico dia a dia.
+  function divAdjust(mk, items){
+    if (!profile.divInBalance) return {adj:0, ev:[]};
+    const [y,m] = mk.split("-").map(Number), dim = daysIn(y,m);
+    const ev = [];
+    const cardDay = card => { const {close} = invoiceDates(mk, card); return close.getFullYear() === y && close.getMonth() + 1 === m ? close.getDate() : dim; };
+    const dayOf = t => t.date.slice(0,7) === mk ? Math.min(dim, Number(t.date.slice(8,10))) : 1;
+    for (const i of splitItems()) if (i.key === mk && i.share){
+      const t = i.tx, card = !t.ext && isCard(t) ? cardOf(t) : null;
+      const v = i.who === "me" ? i.share : -i.share;
+      ev.push({day: card ? cardDay(card) : dayOf(t), v, label: `${i.who === "me" ? "A receber" : "A pagar"}: ${t.desc || t.cat}`});
+    }
+    for (const t of monthTxs(mk)) if (isSettle(t)){
+      const v = t.type === "in" ? -t.cents : t.cents;
+      ev.push({day: Math.min(dim, Number(t.date.slice(8,10))), v, label: "Acerto da divisão"});
+    }
+    return {adj: ev.reduce((s, e) => s + e.v, 0), ev};
   }
 
   function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),2400); }
@@ -2186,7 +2214,7 @@
     const now = new Date(), nowK = monthKey(now);
     const [y,m] = nowK.split("-").map(Number), dim = daysIn(y,m);
     const {inC, outC} = monthTotals(nowK, items);
-    const free = inC - outC, left = dim - now.getDate() + 1;
+    const free = inC - outC + divAdjust(nowK, items).adj, left = dim - now.getDate() + 1;
     const per = free > 0 ? Math.floor(free / left) : 0;
     const showHero = tab === "resumo" && monthKey(view) === nowK && (inC > 0 || outC > 0);
     $("safeBox").hidden = !showHero;
@@ -2205,11 +2233,19 @@
     const inv = items.filter(i => i.key === mk);
 
     const {inC, outC} = monthTotals(mk, items);
+    const {adj} = divAdjust(mk, items);
     $("vIn").textContent = brl(inC);
     $("vOut").textContent = brl(outC);
-    $("vBal").textContent = brl(inC-outC);
+    $("vBal").textContent = brl(inC - outC + adj);
+    // etiqueta "A receber" quando a outra pessoa te deve neste mês; "Na conta" mostra o dinheiro que de fato se moveu
+    $("recvTag").hidden = !(adj > 0);
+    $("recvTag").textContent = `A receber ${brl(adj)}`;
+    $("recvTag").title = `${name()} te deve ${brl(adj)} da divisão deste mês`;
+    $("cashLine").hidden = adj === 0;
+    $("cashLine").textContent = `Na conta: ${brl(inC - outC)}`;
     const C = 2*Math.PI*52;
-    const ratio = inC > 0 ? outC / inC : (outC > 0 ? 1 : 0);
+    const spent = Math.max(0, outC - adj);
+    const ratio = inC > 0 ? spent / inC : (spent > 0 ? 1 : 0);
     $("ringArc").setAttribute("stroke-dasharray", `${Math.min(1, ratio)*C} ${C}`);
     $("ringArc").style.stroke = ratio > 1 ? "var(--red)" : "var(--accent)";
     $("ringPct").textContent = inC > 0 ? `${Math.round(ratio*100)}%` : "—";
@@ -2298,6 +2334,7 @@
       days[d].net -= tot;
       days[d].ev.push({kind:"bill", label:`Fatura ${card.name} (vence ${pad(due.getDate())}/${pad(due.getMonth() + 1)})`, v:-tot});
     }
+    for (const e of divAdjust(mk, items).ev){ days[e.day].net += e.v; days[e.day].ev.push({kind: e.v > 0 ? "pay" : "out", label: e.label, v: e.v}); }
     return {dim, days};
   }
   function renderBalance(mk, items){
@@ -3908,11 +3945,15 @@
   // ----- Conta dividida -----
   function pagePartner(){
     const nameIn = h("input", {maxlength:24, placeholder:"Ex.: Ana", value: profile.partnerName});
+    const balIn = h("input", {type:"checkbox", class:"switch", checked: profile.divInBalance,
+      onchange: async () => { if (await saveProfile({...profile, divInBalance: balIn.checked})) toast(balIn.checked ? "Divisão contada no saldo" : "Saldo só com o dinheiro da conta"); }});
     const err = errBox();
     return [
       pageHead("Conta dividida", "menu"),
       field("Nome de quem divide com você", nameIn),
       h("div", {class:"hint", text:"Aparece na aba Divisão e nos textos, como “Ana te deve R$ 50,00”."}),
+      h("label", {class:"switch-row"}, h("span", {}, "Contar a divisão no saldo",
+        h("small", {class:"sw-sub", text:"O saldo do Resumo desconta só a sua parte das contas divididas e mostra “A receber” quando a outra pessoa te deve. Embaixo aparece quanto está de fato na conta."})), balIn),
       err,
       h("div", {class:"actions"}, h("button", {type:"button", class:"btn primary", text:"Salvar", onclick: async () => {
         const nm = nameIn.value.trim();
